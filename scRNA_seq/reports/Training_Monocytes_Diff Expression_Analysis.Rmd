@@ -1,0 +1,3373 @@
+---
+title: "DiffExpAnalysis TrainingMonocytes"
+author: "Zuly P"
+date: "2025-10-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+###LoadLibraries
+```{r loading libraries}
+suppressMessages(library('edgeR'))
+suppressMessages(library(plyr))
+suppressMessages(library(tidyr))
+suppressMessages(library(dplyr))
+suppressMessages(library(Seurat)) ##first 4+
+suppressMessages(library(patchwork))
+suppressMessages(library(ggplot2))
+suppressMessages(library(sctransform))#
+suppressMessages(library(BiocManager))
+suppressMessages(library(limma))
+suppressMessages(library(tidyverse))
+suppressMessages(library(patchwork))
+suppressMessages(library(viridis))
+suppressMessages(library(Seurat))
+suppressMessages(library(scCustomize))
+suppressMessages(library(qs))
+suppressMessages(library(stringr))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(circlize))
+suppressMessages(library(RColorBrewer))
+suppressPackageStartupMessages(library(eulerr))
+suppressPackageStartupMessages(library(UpSetR))
+
+```
+
+
+Note; We're going to perform two analysis the current one using major celltypes. -->
+The second one using subtypes. script de_pseudobulkSCT_IBSM40_rds2.R. -->
+
+```{r reading input}
+##Read in data
+immune.combined <- readRDS("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/input/IBSM_monoSCT_integbyDayDonor_220823.rds")
+```
+
+###FIGURE 1a.
+```{r Figure 1a}
+##Clustering
+
+#Checking new clustering
+DefaultAssay(immune.combined) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+#immune.combined <- ScaleData(immune.combined, verbose = FALSE)
+immune.combined <- RunPCA(immune.combined, npcs = 30, verbose = FALSE)
+immune.combined <- RunUMAP(immune.combined, reduction = "pca", dims = 1:30)
+immune.combined <- FindNeighbors(immune.combined, reduction = "pca", dims = 1:30)
+
+##Changing clusters names
+immune.combined@meta.data$celltype2 <- NA
+immune.combined@meta.data$celltype2[which(str_detect(immune.combined@meta.data$celltype, "cMonocyte-COQ7_11213"))] <- "cMonocyte-COQ7"
+immune.combined@meta.data$celltype2[which(str_detect(immune.combined@meta.data$celltype, "cMonocyte-IL_02614"))] <- "cMonocyte-IL1B"
+immune.combined@meta.data$celltype2[which(str_detect(immune.combined@meta.data$celltype, "cMonocyte-ISG15_10"))] <- "cMonocyte-ISG15"
+immune.combined@meta.data$celltype2[which(str_detect(immune.combined@meta.data$celltype, "cMonocyte-S100A8_79"))] <- "cMonocyte-S100A8"
+immune.combined@meta.data$celltype2[which(str_detect(immune.combined@meta.data$celltype, "DCs1_15"))] <- "DCs1"
+immune.combined@meta.data$celltype2[which(str_detect(immune.combined@meta.data$celltype, "DCs2_511"))] <- "DCs2"
+immune.combined@meta.data$celltype2[which(str_detect(immune.combined@meta.data$celltype, "intMonocyte_3"))] <- "int-Monocyte"
+immune.combined@meta.data$celltype2[which(str_detect(immune.combined@meta.data$celltype, "ncMonocyte-CD16_48"))] <- "nc-Monocyte"
+immune.combined@meta.data$celltype2[which(str_detect(immune.combined@meta.data$celltype, "pDCs_16"))] <- "pDCs"
+
+##Fixing levels of some variables
+celltype_levels <- c("cMonocyte-IL1B","cMonocyte-S100A8",
+                     "cMonocyte-COQ7","cMonocyte-ISG15",
+                     "int-Monocyte", "nc-Monocyte", 
+                     "DCs1", "DCs2", "pDCs")
+
+immune.combined@meta.data$celltype2 <- factor(x = immune.combined@meta.data$celltype2, levels = celltype_levels)
+
+Idents(immune.combined) <- "celltype2"
+Idents(immune.combined) <- "integrated_snn_res.0.3"
+
+Tfh_colors_list <- c("#9e0142", "#f4a582", "#5e4fa2", "#66c2a5","#74add1",
+                     "#8c510a", "#bf812d", "#fee090", "#01665e", "#b2abd2", "#f8ac0e", "#007b40")
+
+```
+###FIGURE 1a Dimplot with final clusters####.
+```{r FIGURE 1a Dimplot with final clusters}
+#pdf("output_for_paper/Fig1a_Dimplot_celltype_Res0.3_July24.pdf", h=15, w=10)
+DimPlot(immune.combined, label = FALSE, pt.size = 2, group.by = "celltype2", cols = Tfh_colors_list) + NoLegend() 
+#dev.off()
+
+#pdf("output_for_paper/Dimplot_celltype_Res0.3_July24withlabels.pdf", h=15, w=10)
+DimPlot(immune.combined, label = TRUE, pt.size = 2, group.by = "integrated_snn_res.0.3",  cols = Tfh_colors_list) + NoLegend() 
+#dev.off()
+
+#pdf("output_for_paper/Dimplot_celltype_Res0.3_July24withlabels.pdf", h=15, w=10)
+DimPlot(immune.combined, label = TRUE, pt.size = 2, group.by = "celltype2",cols = Tfh_colors_list) + NoLegend() 
+#dev.off()
+
+#pdf("output_for_paper/PCA_celltype_Res0.3_July24withlabels.pdf", h=15, w=10)
+DimPlot(immune.combined, reduction= 'pca',label = TRUE, pt.size = 2, group.by = "celltype2",cols = Tfh_colors_list) + NoLegend() 
+#dev.off()
+
+####Just classical monocytes
+
+# Subset based on PCA_2 using the subset function
+#immune.combined_subset  <- subset(immune.combined, cells = rownames(immune.combined@reductions$pca@cell.embeddings[immune.combined@reductions$pca@cell.embeddings[, 2] < 8, ]))
+
+# Subset based on celltypes using the subset function
+cMonocytes <- c("int-Monocyte", "nc-Monocyte", "cMonocyte-IL1B", "cMonocyte-S100A8", "cMonocyte-COQ7")
+immune.combined_subset2  <- subset(immune.combined, idents = cMonocytes)
+
+# Dimplot with only classical monocytes
+pdf("output_for_paper/PCA_cMonocytes_Res0.3_July24withlabels.pdf", h=15, w=10)
+DimPlot(immune.combined_subset2, reduction= 'pca', label = TRUE, pt.size = 2, group.by = "celltype2",cols = Tfh_colors_list) + NoLegend() 
+dev.off()
+
+# Dimplot with only classical monocytes
+pdf("output_for_paper/umap_cMonocytes_Res0.3_July24withlabels.pdf", h=15, w=10)
+DimPlot(immune.combined_subset2, reduction= 'umap', label = TRUE, pt.size = 2, group.by = "celltype2",cols = Tfh_colors_list) + NoLegend() 
+dev.off()
+```
+
+###FIGURE 1b Dotplot_monomarkers_Res0.8_March24.####
+```{r FIGURE 1b Dotplot_monomarkers_Res0.8_March24 }
+##Cluster id
+DefaultAssay(immune.combined) <- "SCT"
+
+#immune.combined <- SCTransform(immune.combined, vars.to.regress = "percent.mt", verbose = FALSE)
+immune.combined <- RunPCA(immune.combined, features = VariableFeatures(object = immune.combined), npcs = 30, verbose = FALSE)
+immune.combined <- RunUMAP(immune.combined, reduction = "pca", dims = 1:20)
+immune.combined <- FindNeighbors(immune.combined, reduction = "pca", dims = 1:20)
+Idents(immune.combined) <- "celltype2"
+table(immune.combined$celltype2)
+
+##pdf("output_for_paper/Fig1b_Dotplot_monomarkers_Res0.8_July24.pdf", h=15, w=10)
+DotPlot(immune.combined, assay = "SCT", features=c("CD14","IL1B","S100A8","COQ7", "ISG15", "FCGR3A", "CDKN1C", "CX3CR1",
+                                                   "CLEC9A","CADM1", "XCR1",
+                                                   "CD1C","FCER1A","CD33", 
+                                                   "CLEC4C","NRP1","IL3RA"),
+        cols=c("#fee090","#9e0142"))+theme_bw(base_size=14)+theme(axis.text.x = element_text(angle = 45,  vjust = 1, hjust=1))+theme (panel.grid.major = element_blank (), panel.grid.minor = element_blank ())
+#dev.off()
+
+#pdf("output_for_paper/Fig1b_Dotplot_monomarkers_Res0.8_July24B.pdf", h=15, w=10)
+DotPlot(immune.combined, assay = "SCT", features=c("CD14","IL1B","LRRK2","COQ7", "ISG15", "FCGR3A", "CDKN1C", "CX3CR1",
+                                                   "CLEC9A","CADM1", "XCR1",
+                                                   "CD1C","FCER1A","CLEC10A",
+                                                   "CLIC3","NRP1","GZMB"),
+        cols=c("#fee090","#9e0142"))+theme_bw(base_size=14)+theme(axis.text.x = element_text(angle = 45,  vjust = 1, hjust=1))+theme (panel.grid.major = element_blank (), panel.grid.minor = element_blank ())
+#dev.off()
+```
+
+####Figure 1e Barplot cellnumbers per donor per different days####
+```{r Figure 1e Barplot cellnumbers per donor per different days}
+Fig1EMeta <- immune.combined@meta.data
+colnames(Fig1EMeta)
+Fig1EMeta_Freq <- as.data.frame(table(Fig1EMeta$donor_id, Fig1EMeta$celltype2, Fig1EMeta$day))
+#Renaming columns
+colnames(Fig1EMeta_Freq)[1] ="Donor"
+colnames(Fig1EMeta_Freq)[2] ="Celltype"
+colnames(Fig1EMeta_Freq)[3] ="Day"
+colnames(Fig1EMeta_Freq)[4] ="Count"
+head(Fig1EMeta_Freq)
+
+##Creating celltype factors
+celltype_fact<- c("cMonocyte-IL1B","cMonocyte-S100A8", "cMonocyte-COQ7", "cMonocyte-ISG15", "int-Monocyte", "nc-Monocyte", "DCs1", "DCs2", "pDCs")
+##Creating day factors
+Fig1EMeta_Freq$Celltype <- factor(Fig1EMeta_Freq$Celltype, levels = celltype_fact)
+
+##Creating day factors
+day_fact<- c("day0","day8", "day36")
+##Creating day factors
+Fig1EMeta_Freq$Day <- factor(Fig1EMeta_Freq$Day, levels = day_fact)
+
+##Creating donors factors
+donor_fact<- c("donor0","donor1", "donor2", "donor3")
+##Creating day factors
+Fig1EMeta_Freq$Donor <- factor(Fig1EMeta_Freq$Donor, levels = donor_fact)
+
+# Calculate the proportions
+Fig1EMeta_Prop <- Fig1EMeta_Freq %>%
+  group_by(Donor, Day) %>%
+  mutate(Proportion = Count / sum(Count)*100) %>%
+  ungroup()
+
+#Figure1E-Barplot with cell numbers per donor
+pop_clus <- ggplot(data = Fig1EMeta_Prop, aes(x = Day, y = Proportion, fill = Celltype)) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual(values = Tfh_colors_list) +
+  scale_y_continuous(limits = c(0, 100)) +
+  facet_grid(~ Donor, scales = "free") +
+  theme(
+    panel.background = element_rect(fill = 'white', colour = 'black'),
+    axis.title.x = element_blank(),
+    axis.text.x = element_blank(), 
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    strip.text = element_text(size = 12, color = "black")
+  ) 
+
+pop_clus
+
+#ggsave("output_for_paper/Fig1E_Barplot_NoCells_per_DonorDay_16724.pdf", plot = pop_clus,
+#      height = 8, width = 16, dpi = 300)
+```
+
+#SupFigure 1 EBarplot with cell numbers per day
+```{rSupFigure1E Barplot with cell numbers per day}
+SupFig1EMeta_Freq <- as.data.frame(table(Fig1EMeta$celltype2, Fig1EMeta$day))
+#Renaming columns
+colnames(SupFig1EMeta_Freq)[1] ="Celltype"
+colnames(SupFig1EMeta_Freq)[2] ="Day"
+colnames(SupFig1EMeta_Freq)[3] ="Count"
+head(SupFig1EMeta_Freq)
+
+##Creating celltype factors
+celltype_fact<- c("cMonocyte-IL1B","cMonocyte-S100A8", "cMonocyte-COQ7", "cMonocyte-ISG15", "int-Monocyte", "nc-Monocyte", "DCs1", "DCs2", "pDCs")
+##Creating day factors
+SupFig1EMeta_Freq$Celltype <- factor(SupFig1EMeta_Freq$Celltype, levels = celltype_fact)
+
+##Creating day factors
+day_fact<- c("day0","day8", "day36")
+##Creating day factors
+SupFig1EMeta_Freq$Day <- factor(SupFig1EMeta_Freq$Day, levels = day_fact)
+# Calculate the proportions
+SupFig1EMeta_Freq <- SupFig1EMeta_Freq %>%
+  group_by(Day) %>%
+  mutate(Proportion = Count / sum(Count)*100) %>%
+  ungroup()
+
+pop_clus2 <- ggplot(data = SupFig1EMeta_Freq, aes(x = Day, y = Proportion, fill = Celltype)) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual(values = Tfh_colors_list) +
+  scale_y_continuous(limits = c(0, 100)) +
+  theme(
+    panel.background = element_rect(fill = 'white', colour = 'black'),
+    axis.title.x = element_blank(),
+    axis.text.x = element_blank(), 
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    strip.text = element_text(size = 12, color = "black")
+  ) 
+
+pop_clus2
+
+#ggsave("output_for_paper/SupFigure_Barplot_ClusterProp_per_Day_290125.pdf", plot = pop_clus,
+#       height = 8, width = 16, dpi = 300)
+```
+## SUPPLEMENTARY PLOTS
+### Sup_Fig_1A_vlnplot_prepostQC
+```{r Sup_Fig_1A_vlnplot_prepostQC####}
+#renv::init()
+
+# Tfh_colors_list <- c("#9e0142", "#f4a582", "#5e4fa2", "#66c2a5","#74add1",
+#                      "#8c510a", "#bf812d", "#fee090", "#01665e", "#b2abd2", "#f8ac0e", "#007b40")
+# 
+# ibsm_mono <- readRDS( "data/IBSM_mono_prefiltered_210823.rds")
+metadata = as.data.frame(immune.combined@meta.data)
+##Changing variable names
+colnames(metadata)
+colnames(metadata)[2]<- "nUMI"
+colnames(metadata)[3]<- "nGene"
+colnames(metadata)[8]<- "mitoRatio"
+
+##A. pre and post filter quality variables
+
+colnames(ibsm_mono@meta.data)
+colnames(ibsm_mono@meta.data)[2]<- "nUMI"
+colnames(ibsm_mono@meta.data)[3]<- "nGene"
+colnames(ibsm_mono@meta.data)[8]<- "mitoRatio"
+
+
+a <- VlnPlot(ibsm_mono, features = c("nUMI", "nGene","log10GenesPerUMI", "mitoRatio"), cols = Tfh_colors_list, group.by = "day", pt.size = -1, ncol = 4)
+
+a <- VlnPlot(ibsm_mono, features = c("nUMI"), cols = Tfh_colors_list, group.by = "day", split.by = "donor_id", pt.size = -1, ncol = 4)
+
+
+ibsm_mono_f <- subset(ibsm_mono, subset = nGene > 200 & nUMI < 7000 & mitoRatio < 20 & log10GenesPerUMI > 0.8) 
+
+b <- VlnPlot(ibsm_mono_f, features = c("nUMI", "nGene","log10GenesPerUMI", "mitoRatio"), cols = Tfh_colors_list, group.by = "day", pt.size = -1, ncol = 4)
+(a/b)
+
+ggsave("output_for_paper/Sup_Fig_1A_vlnplot_prepostQC.pdf", plot = (a/b),
+       height = 12, width = 10, dpi = 300)
+##vertical option
+f<-(a-b)  + plot_layout(guides='collect')
+
+#ggsave("output_for_paper/Sup_Fig_1A_vlnplot_prepostQC2.pdf", plot = f,
+#       height = 20, width = 6, dpi = 300)
+```
+
+### Supp_Fig_1B, barplot with cell numbers/donor and mito Ratio 
+
+```{r Supp_Fig_1B, barplot with cell numbers/donor and mito Ratio}
+head(ibsm_mono@meta.data)
+metadata <- ibsm_mono@meta.data
+donor_day_lev <- c("day0_donor0", "day8_donor0", "day36_donor0", "day0_donor1", "day8_donor1", "day36_donor1",
+                   "day0_donor2",  "day8_donor2","day36_donor2", "day0_donor3", "day8_donor3", "day36_donor3")
+metadata$day_donor <- factor(metadata$day_donor, levels = donor_day_lev)
+metadata %>%
+  ggplot(aes(x=day_donor, fill=day_donor)) +
+  geom_bar() +
+  scale_fill_manual(values=Tfh_colors_list)+
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust=1)) +
+  theme(plot.title = element_text(hjust=0.5, face="bold")) +
+  theme(legend.position = "none")+
+  ggtitle("Number of cells per donor and day") -> aa
+
+ibsm_mono_f@meta.data$day_donor <- factor(ibsm_mono_f@meta.data$day_donor, levels = donor_day_lev)
+
+Idents(object = ibsm_mono_f) <- "donor_id"
+bb <- VlnPlot(ibsm_mono_f, features = c("mitoRatio"), fill.by = "ID", group.by = "day_donor", pt.size = -1, ncol = ) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust=1)) + scale_fill_manual(values=Tfh_colors_list)+
+  theme(legend.position = "none")
+
+ff <- bb/aa
+ 
+#ggsave("output_for_paper/Sup_Fig_1B_barplot_ncell_mito.pdf", plot = (aa/bb),
+#       height = 10, width = 6, dpi = 300)
+```
+
+###Figure 1C, dimplot before and after integration 
+```{r Figure 1C, dimplot before and after integration }
+##Read in data
+ibsm.mono.F <- readRDS(file = "data/IBSM_mono_filtered_210823.rds")
+##Before integration
+#### NORMALISATION #########
+#adjust the limit for allowable object sizes within R 
+options(future.globals.maxSize = 4000 * 1024^2)
+
+ibsm.mono.F <- SCTransform(ibsm.mono.F, vars.to.regress = "percent.mt", verbose = TRUE)
+
+
+#### DIMENSIONALITY REDUCTION
+# This step gives equal weight in downstream analyses, so that highly-expressed genes do not dominate
+ibsm.mono.F   <- RunPCA(ibsm.mono.F  , npcs = 30, verbose = FALSE)
+ibsm.mono.F   <- RunUMAP(ibsm.mono.F  , reduction = "pca", dims = 1:30)
+ibsm.mono.F   <- FindNeighbors(ibsm.mono.F  , reduction = "pca", dims = 1:30)
+
+##Plotting
+Idents(ibsm.mono.F) <- "day_donor"
+ddd <- DimPlot(ibsm.mono.F, label = FALSE, cols= Tfh_colors_list, pt.size = 2, group.by = "day_donor") +
+  scale_fill_manual(values=Tfh_colors_list)+
+  theme(legend.position = "none")
+
+##After integration
+
+immune.combined <- readRDS( "data/IBSM_monoSCT_integbyDayDonor_220823.rds")
+
+DefaultAssay(immune.combined) <- "integrated"
+Idents(immune.combined) <- "day_donor"
+eee <- DimPlot(immune.combined, label = FALSE, cols= Tfh_colors_list, pt.size = 2, group.by = "day_donor") + scale_fill_manual(values=Tfh_colors_list)
+
+ddd+eee
+#ggsave("output_for_paper/Sup_Fig_1C_dimplot_prepostIntegration.pdf", plot = (ddd+eee),
+#       height = 6, width = 10, dpi = 300)
+```
+
+### Venn Diagram
+
+```{r Reading significant genes output}
+#### Getting the gene list and selecting the top 10 per cluster/day ####
+sigDGEs <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/psbulk_sigGens__all_DayClusters.csv", row.names=1)
+
+
+sigDGEs_sub<- sigDGEs[sigDGEs$cluster_name %in% c("cMonocyte-COQ7", "cMonocyte-IL",
+                                                  "cMonocyte-ISG15", "cMonocyte-S100A8"),]
+
+# Creating direction variable
+sigDGEs_sub$dir_sig[sigDGEs_sub$logFC>0] <-"up"
+sigDGEs_sub$dir_sig[sigDGEs_sub$logFC<0] <-"down"
+#Adding new name
+sigDGEs_sub$cluster_name = factor(sigDGEs_sub$cluster_name,
+                                  labels = c("cMonocyte-IL"="CM1",                                                                        "cMonocyte-S100A8"="CM2",                                                                    "cMonocyte-COQ7"="CM3",                                                                      "cMonocyte-ISG15"="CM4"))
+
+sigDGEs_sub<- sigDGEs_sub[sigDGEs_sub$day %in% c("day36","day8"),]
+table(sigDGEs_sub$cluster_name, sigDGEs_sub$day )
+
+```
+
+```{r venn diagram CM1}
+sigDGEs_CM1<- sigDGEs_sub[sigDGEs_sub$cluster_name %in% "CM1",]
+#Change colnames
+colnames(sigDGEs_CM1)[1] ="celltype"
+colnames(sigDGEs_CM1)[4] ="Log2FC"
+colnames(sigDGEs_CM1)[8] ="p_adj"
+
+# 1. Get unique gene lists for each group
+day8Genes_CM1   <- unique(sigDGEs_CM1 %>% filter(day == "day8") %>% pull(gene))
+
+day36Genes_CM1   <- unique(sigDGEs_CM1 %>% filter(day == "day36") %>% pull(gene))
+
+# 2. Compute the disjoint sets (Venn regions)
+
+# Double intersection
+day8_day36_CM1 <- Reduce(intersect, list(day8Genes_CM1, day36Genes_CM1))
+
+# Unique only
+d8_only_CM1   <- setdiff(day8Genes_CM1, day8_day36_CM1)
+d36_only_CM1   <- setdiff(day36Genes_CM1, day8_day36_CM1)
+
+venn_db_CM1 <- as.data.frame(bind_rows(
+  tibble(set = "d8_only",  gene = d8_only_CM1),
+  tibble(set = "d36_only", gene = d36_only_CM1),
+  tibble(set = "inter",    gene = day8_day36_CM1)
+)) %>% mutate(celltype="CM1")
+
+# 3. Construct named region vector for eulerr
+fit1_CM1 <- euler(c(
+  "day8"  = length(day8Genes_CM1),
+  "day8&day36"= length(day8_day36_CM1),
+  "day36" = length(day36Genes_CM1)
+  ))
+
+# 4. Plot the Venn diagram with correct disjoint counts
+pdf("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/VennDiagram_CM1.pdf")
+
+plot(
+  fit1_CM1,
+  main="CM1",
+  quantities = TRUE,
+  fills = list(fill = c("#fdae61", "#0072B2"), alpha = 0.5),
+  edges = list(lwd = 1),
+  labels = list(font = 2)
+) 
+dev.off()
+```
+```{r venn diagram CM2}
+sigDGEs_CM2<- sigDGEs_sub[sigDGEs_sub$cluster_name %in% "CM2",]
+#Change colnames
+colnames(sigDGEs_CM2)[1] ="celltype"
+colnames(sigDGEs_CM2)[4] ="Log2FC"
+colnames(sigDGEs_CM2)[8] ="p_adj"
+
+# 1. Get unique gene lists for each group
+day8Genes_CM2   <- unique(sigDGEs_CM2 %>% filter(day == "day8") %>% pull(gene))
+
+day36Genes_CM2  <- unique(sigDGEs_CM2 %>% filter(day == "day36") %>% pull(gene))
+
+# 2. Compute the disjoint sets (Venn regions)
+
+# Double intersection
+day8_day36_CM2 <- Reduce(intersect, list(day8Genes_CM2, day36Genes_CM2))
+
+# Unique only
+d8_only_CM2   <- setdiff(day8Genes_CM2, day8_day36_CM2)
+d36_only_CM2  <- setdiff(day36Genes_CM2, day8_day36_CM2)
+
+venn_db_CM2 <- as.data.frame(bind_rows(
+  tibble(set = "d8_only",  gene = d8_only_CM2),
+  tibble(set = "d36_only", gene = d36_only_CM2),
+  tibble(set = "inter",    gene = day8_day36_CM2)
+))%>% mutate(celltype="CM2")
+
+# 3. Construct named region vector for eulerr
+fit1_CM2 <- euler(c(
+  "day8"  = length(day8Genes_CM2),
+  "day8&day36"= length(day8_day36_CM2),
+  "day36" = length(day36Genes_CM2)
+  ))
+
+# 4. Plot the Venn diagram with correct disjoint counts
+pdf("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/VennDiagram_CM2.pdf")
+
+plot(
+  fit1_CM2,
+  main="CM2",
+  quantities = TRUE,
+  fills = list(fill = c("#fdae61", "#0072B2"), alpha = 0.5),
+  edges = list(lwd = 1),
+  labels = list(font = 2)
+) 
+
+dev.off()
+```
+
+```{r venn diagram CM3}
+sigDGEs_CM3<- sigDGEs_sub[sigDGEs_sub$cluster_name %in% "CM3",]
+#Change colnames
+colnames(sigDGEs_CM3)[1] ="celltype"
+colnames(sigDGEs_CM3)[4] ="Log2FC"
+colnames(sigDGEs_CM3)[8] ="p_adj"
+
+# 1. Get unique gene lists for each group
+day8Genes_CM3   <- unique(sigDGEs_CM3 %>% filter(day == "day8") %>% pull(gene))
+
+day36Genes_CM3  <- unique(sigDGEs_CM3 %>% filter(day == "day36") %>% pull(gene))
+
+# 2. Compute the disjoint sets (Venn regions)
+
+# Double intersection
+day8_day36_CM3 <- Reduce(intersect, list(day8Genes_CM3, day36Genes_CM3))
+
+# Unique only
+d8_only_CM3   <- setdiff(day8Genes_CM3, day8_day36_CM3)
+d36_only_CM3  <- setdiff(day36Genes_CM3, day8_day36_CM3)
+
+venn_db_CM3 <- as.data.frame(bind_rows(
+  tibble(set = "d8_only",  gene = d8_only_CM3),
+  tibble(set = "d36_only", gene = d36_only_CM3),
+  tibble(set = "inter",    gene = day8_day36_CM3)
+))%>% mutate(celltype="CM3")
+
+# 3. Construct named region vector for eulerr
+fit1_CM3 <- euler(c(
+  "day8"  = length(day8Genes_CM3),
+  "day8&day36"= length(day8_day36_CM3),
+  "day36" = length(day36Genes_CM3)
+  ))
+
+# 4. Plot the Venn diagram with correct disjoint counts
+pdf("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/VennDiagram_CM3.pdf")
+
+plot(
+  fit1_CM3,
+  main="CM3",
+  quantities = TRUE,
+  fills = list(fill = c("#fdae61", "#0072B2"), alpha = 0.5),
+  edges = list(lwd = 1),
+  labels = list(font = 2)
+) 
+
+dev.off()
+```
+
+```{r venn diagram CM3}
+sigDGEs_CM4<- sigDGEs_sub[sigDGEs_sub$cluster_name %in% "CM4",]
+#Change colnames
+colnames(sigDGEs_CM4)[1] ="celltype"
+colnames(sigDGEs_CM4)[4] ="Log2FC"
+colnames(sigDGEs_CM4)[8] ="p_adj"
+
+# 1. Get unique gene lists for each group
+day8Genes_CM4   <- unique(sigDGEs_CM4 %>% filter(day == "day8") %>% pull(gene))
+
+day36Genes_CM4  <- unique(sigDGEs_CM4 %>% filter(day == "day36") %>% pull(gene))
+
+# 2. Compute the disjoint sets (Venn regions)
+
+# Double intersection
+day8_day36_CM4 <- Reduce(intersect, list(day8Genes_CM4, day36Genes_CM4))
+
+# Unique only
+d8_only_CM4   <- setdiff(day8Genes_CM4, day8_day36_CM4)
+d36_only_CM4  <- setdiff(day36Genes_CM4, day8_day36_CM4)
+
+venn_db_CM4 <- as.data.frame(bind_rows(
+  tibble(set = "d8_only",  gene = d8_only_CM4),
+  tibble(set = "d36_only", gene = d36_only_CM4),
+  tibble(set = "inter",    gene = day8_day36_CM4)
+))%>% mutate(celltype="CM4")
+
+# 3. Construct named region vector for eulerr
+fit1_CM4 <- euler(c(
+  "day8"  = length(day8Genes_CM4),
+  "day8&day36"= length(day8_day36_CM4),
+  "day36" = length(day36Genes_CM4)
+  ))
+
+# 4. Plot the Venn diagram with correct disjoint counts
+pdf("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/VennDiagram_CM4.pdf")
+plot(
+  fit1_CM4,
+  main="CM4",
+  quantities = TRUE,
+  fills = list(fill = c("#fdae61", "#0072B2"), alpha = 0.5),
+  edges = list(lwd = 1),
+  labels = list(font = 2)
+) 
+dev.off()
+venn_genes = rbind(venn_db_CM1, venn_db_CM2, venn_db_CM3,venn_db_CM4)
+
+# sigDGEs_sub$cluster_gene = paste0(sigDGEs_sub$cluster_name, "_", sigDGEs_sub$gene)
+# sigDGEs_sub$dup = as.integer(duplicated(sigDGEs_sub$cluster_gene))
+# 
+# venn_genes$cluster_gene = paste0(venn_genes$celltype,"_",venn_genes$gene)
+# venn_genes = venn_genes%>%select(-celltype)
+
+#psbDE= inner_join(sigDGEs_sub, venn_genes, by="gene", multiple ="any", relationship = #"many-to-many")
+```
+```{r, combining venn and edger results }
+psbDE_CM1 <- sigDGEs_sub %>%
+  filter(cluster_name == "CM1") %>%
+  mutate(set = dplyr::case_when(
+    gene %in% d8_only_CM1      ~ "d8_only",
+    gene %in% d36_only_CM1     ~ "d36_only",
+    gene %in% day8_day36_CM1   ~ "d8&d36",
+    TRUE                   ~ NA_character_
+  ))
+
+psbDE_CM2 <- sigDGEs_sub %>%
+  filter(cluster_name == "CM2") %>%
+  mutate(set = dplyr::case_when(
+    gene %in% d8_only_CM2      ~ "d8_only",
+    gene %in% d36_only_CM2     ~ "d36_only",
+    gene %in% day8_day36_CM2   ~ "d8&d36",
+    TRUE                   ~ NA_character_
+  ))
+
+psbDE_CM3 <- sigDGEs_sub %>%
+  filter(cluster_name == "CM3") %>%
+  mutate(set = dplyr::case_when(
+    gene %in% d8_only_CM3      ~ "d8_only",
+    gene %in% d36_only_CM3     ~ "d36_only",
+    gene %in% day8_day36_CM3   ~ "d8&d36",
+    TRUE                   ~ NA_character_
+  ))
+
+psbDE_CM4 <- sigDGEs_sub %>%
+  filter(cluster_name == "CM4") %>%
+  mutate(set = dplyr::case_when(
+    gene %in% d8_only_CM4      ~ "d8_only",
+    gene %in% d36_only_CM4     ~ "d36_only",
+    gene %in% day8_day36_CM4   ~ "d8&d36",
+    TRUE                   ~ NA_character_
+  ))
+
+
+psbDE_venn = rbind(psbDE_CM1, psbDE_CM2, psbDE_CM3, psbDE_CM4)
+
+
+###We have the genes classify within cluster, now we need to classify based on the 4 clusters
+
+
+# Step 1: Calculate the total number of clusters in the dataset
+total_clusters <- n_distinct(psbDE_venn$cluster_name)  # = 4 in your case
+
+# Step 2: For each gene, count how many clusters it appears in
+# for each set category
+gene_set_counts <- psbDE_venn %>%
+  select(gene, cluster_name, set) %>%
+  distinct() %>%                          # one row per gene-cluster-set combination
+  group_by(gene, set) %>%
+  summarise(
+    n_clusters = n_distinct(cluster_name),
+    .groups = "drop"
+  ) %>%
+  mutate(ratio = n_clusters / total_clusters)  # e.g. 2/4 = 0.50
+
+# Step 3: For each gene, find which set has the highest ratio
+# and check it meets the 50% threshold
+gene_classification <- gene_set_counts %>%
+  group_by(gene) %>%
+  slice_max(ratio, n = 1, with_ties = FALSE) %>%  # take the dominant set
+  ungroup() %>%
+  mutate(set2 = case_when(
+    ratio >= 0.5 & set == "d8_only"  ~ "d8_only",
+    ratio >= 0.5 & set == "d36_only" ~ "d36_only",
+    ratio >= 0.5 & set %in% c("inter", "d8&d36") ~ "d8&d36",
+    TRUE ~ "other"                    # doesn't meet 50% threshold in any set
+  )) %>%
+  select(gene, set2, ratio, n_clusters)
+
+# Step 4: Join set2 back to the original dataset
+psbDE_venn <- psbDE_venn %>%
+  left_join(gene_classification, by = "gene")
+
+# Step 5: Summary
+psbDE_venn %>%
+  select(gene, set2) %>%
+  distinct() %>%
+  count(set2, name = "n_unique_genes") %>%
+  arrange(desc(n_unique_genes)) %>%
+  print()
+
+write.csv(psbDE_venn,"/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv")
+```
+
+
+
+```{r dotplots of unique genes}
+##Nicks plot
+psbDE_venn$log_p <- -log10(psbDE_venn$p_adj)
+psbDE_venn$log_p_cat[psbDE_venn$log_p<=2] <- "<2"
+psbDE_venn$log_p_cat[psbDE_venn$log_p>2 & psbDE_venn$log_p<=3] <- "2-3"
+psbDE_venn$log_p_cat[psbDE_venn$log_p>3 & psbDE_venn$log_p<=4] <- "3-4"
+psbDE_venn$log_p_cat[psbDE_venn$log_p>4 ] <- ">4"
+psbDE_venn$log_p_cat <- factor(psbDE_venn$log_p_cat, levels = c("<2", "2-3","3-4", ">4"))
+
+
+##Selecting all genes from the 5pathwasy of interest in only monocytes
+d8_only20_up =psbDE_venn %>%
+  filter(set =="d8_only")%>%
+  filter(dir_sig == "up")%>%
+  dplyr::arrange(dplyr::desc(logFC)) %>%
+  dplyr::slice_max(n=12,logFC)
+
+d36_only20_up =psbDE_venn %>%
+  filter(set =="d36_only")%>%
+  filter(dir_sig == "up")%>%
+  dplyr::arrange(dplyr::desc(logFC)) %>%
+  dplyr::slice_max(n=12,logFC)
+
+d8_only20_dw =psbDE_venn %>%
+  filter(set =="d8_only")%>%
+  filter(dir_sig == "down")%>%
+  dplyr::arrange(logFC) %>%
+  dplyr::slice_min(n=12,logFC)
+
+d36_only20_down =psbDE_venn %>%
+  filter(set =="d36_only")%>%
+  filter(dir_sig == "down")%>%
+  dplyr::arrange(logFC) %>%
+  dplyr::slice_min(n=12,logFC)
+
+
+# Extract gene columns and merge
+merged_genes2 <- unique(c(d8_only20_up$gene,d36_only20_up$gene, d8_only20_dw$gene, d36_only20_down$gene ))
+
+DEGdfAllgenes <- psbDE_venn[psbDE_venn$gene %in% merged_genes2,]
+DEGdf60 <- DEGdfAllgenes
+
+unique(DEGdf60$cluster_name)
+Tfh_colors_list <- c("#9e0142", "#f4a582", "#5e4fa2", "#66c2a5","#74add1",
+                     "#8c510a", "#bf812d", "#fee090", "#01665e", "#b2abd2", "#f8ac0e", "#007b40")
+
+
+DEGdf60$celltype_day <- paste0(DEGdf60$cluster_name, "_", DEGdf60$day)
+cell_day_lev <- c("CM1_day8",  "CM2_day8",  "CM3_day8", "CM4_day8",
+                  "CM1_day36","CM2_day36","CM3_day36", "CM4_day36")
+##Michelle's suggestion
+
+DEGdf60$celltype_day <- factor(DEGdf60$celltype_day, levels = cell_day_lev)
+DEGdf60$set <- factor(DEGdf60$set, levels = c("d8_only", "d36_only",  "inter")) 
+DEGdf60$gene <- factor(DEGdf60$gene, levels = merged_genes2) 
+
+
+
+  
+# Create dotplot from selected genes
+DEGdf_dotplot <- ggplot(DEGdf60, aes(gene, celltype_day, logFC))+
+  geom_point(aes(fill=logFC, size=log_p_cat), shape=21)+
+  # scale_colour_gradient2(low ="#5e4fa2", mid = "white", high = "#9e0142", midpoint = 0)+
+  scale_fill_steps2(
+    low = "#2166AC", mid = "white", high = "#B2182B",
+    midpoint = 0, limits = c(-2, 4), breaks = seq(-2, 4, by = 2),
+    name = "log2FC"
+  )+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle=90, vjust = 0.10, hjust=1))
+
+DEGdf_dotplot
+#optional: scale with data (rough heuristic)
+w <- max(4, 0.18 * length(unique(DEGdf60$gene)))
+h <- max(3, 0.35 * length(unique(DEGdf60$celltype_day)))
+ggsave(
+  filename = "/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/Dotplot_uniquegenes_day8day36.pdf",
+  plot = DEGdf_dotplot, width = w, height = h, units = "in", dpi = 400, limitsize = FALSE
+)
+
+# ggsave(DEGdf_dotplot, filename = "/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/Dotplot_uniquegenes_day8day36.pdf", h = 10,w =10, dpi = 400,limitsize = FALSE)
+
+```
+
+## Heatmap of significantly expressed genes on day 8 & day36 (intersect).
+Average expression per day cluster. 
+
+```{r heatmap of intersect genes}
+set.seed(12345)
+Average.df <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/monosIBSM_Averagemat_LOGNORMALISED_daycluster_300925.csv", row.names = 1)
+rownames(Average.df) <- Average.df$day_cluster
+str(Average.df)
+Average.df$day <- factor(Average.df$day, levels = c("day0", "day8", "day36"))
+Average.df$cluster <- factor(Average.df$cluster, levels = cMonocytes)
+#cMonocytes <- c("intMonocyte", "ncMonocyte", "CM1", "CM2", "CM3", "CM4") #If the matrix include Seurat metadata like donor, it will include all the monos. 
+
+#### Subsetting cluster (for example one heatmap per cluster)
+Average.sub <- Average.df[Average.df$cluster %in% c("CM1", "CM2", "CM3", "CM4"), ]
+
+rownames(Average.sub) <- Average.sub$day_cluster
+#### okay now to reorder EVERYTHING... 
+
+my_order <- c("day0-CM1", "day0-CM1", "day0-CM1", "day0-CM1",
+              "day8-CM1", "day8-CM1", "day8-CM1", "day8-CM1",
+              "day36-CM1", "day36-CM1", "day36-CM1", "day36-CM1",
+              "day0-CM2", "day0-CM2", "day0-CM2", "day0-CM2",
+              "day8-CM2", "day8-CM2", "day8-CM2", "day8-CM2",
+              "day36-CM2", "day36-CM2", "day36-CM2", "day36-CM2",
+              "day0-CM3", "day0-CM3", "day0-CM3", "day0-CM3",
+              "day8-CM3", "day8-CM3", "day8-CM3", "day8-CM3",
+              "day36-CM3", "day36-CM3", "day36-CM3", "day36-CM3",
+              "day0-CM4", "day0-CM4", "day0-CM4", "day0-CM4",
+              "day8-CM4", "day8-CM4", "day8-CM4", "day8-CM4",
+              "day36-CM4", "day36-CM4", "day36-CM4", "day36-CM4")
+
+Average.sub <- Average.sub[match(my_order, rownames(Average.sub)), ]
+
+Average.sub <- Average.sub %>%
+  mutate(day = factor(day, levels = c("day0","day8","day36")),
+         cluster = factor(cluster, levels = cMonocytes )) %>%
+  arrange(cluster, day)
+
+#### Getting the gene list and selecting the top 10 per cluster/day ####
+# write.csv(psbDE_venn,"/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv")
+sigDGEs <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names=1)
+
+#Adding new name
+sigDGEs$cluster_name = factor(sigDGEs$cluster_name, levels = cMonocytes)
+
+sigDGEs<- sigDGEs[sigDGEs$day %in% c("day36","day8"),]
+
+# Ensure only the top 80 unique genes
+# merged_genes2 <- unique(merged_genes2[1:80])
+
+merged_genes2 <-sigDGEs %>%
+  filter(set == "inter") %>%
+  arrange(dplyr::desc(logFC))
+
+merged_genes2 <- unique(merged_genes2$gene)
+
+#### subsetting our selected genes
+dfsub_d816<- as.matrix(Average.sub[, colnames(Average.sub) %in% merged_genes2])
+
+dfsub_d816 <- as.matrix(dfsub_d816)
+dfsub_d816 = scale(dfsub_d816)
+
+col = list(Cluster = c("CM1" = "#9e0142",
+                       "CM2" = "#f4a582",
+                       "CM3" = "#5e4fa2",
+                       "CM4" = "#66c2a5"),
+            Day = c("day0" = "#bababa",
+                   "day8" = "#fdae61",
+                   "day36" = "blue"))
+
+# ##We got high medium and low expression, we want 3 colors
+# rng <- max(abs(dfsub_d816), na.rm = TRUE)  # or use abs(expr_z) if you built it
+# rng <- if (is.finite(rng) && rng > 0) rng else 1  # fallback
+
+# 3-color diverging palette: negative / zero / positive
+col_fun <- colorRamp2(
+  c(-2, 0, 4),
+  c("#2166AC", "#FFFFFF", "#B2182B")   # blue - white - red (swap colors if you want)
+)
+
+ha <- HeatmapAnnotation(Cluster=Average.sub$cluster,
+                        Day=Average.sub$day,
+                        col = col)
+
+col_split <- factor(Average.sub$cluster, levels = c("CM1","CM2","CM3","CM4"))
+
+
+pdf(here("output/heatmap_D8andD36sigGenes_avexpdaycluster_nrev1.pdf"), width = 8, height =10)
+Heatmap(t(dfsub_d816),
+        name = "AvExpr", col=col_fun,
+        top_annotation = ha,
+        cluster_rows = TRUE,
+        cluster_columns = FALSE,
+        column_split = col_split,                 # <- split by cluster
+        column_gap = grid::unit(4, "mm"),         # <- space between clusters
+        # row_split = 2,
+        # row_gap = grid::unit(1,"mm"),
+        column_title = "Genes", row_title = "Samples",
+        row_names_gp = gpar(fontsize=6),
+        column_names_gp = gpar(fontsize=4))
+dev.off()
+
+```
+## Heatmap of uniquely expressed genes per day, in at least 3/4 subtypes.
+Average expression per day cluster. 
+
+```{r heatmap of uniquely expressed genes per day}
+
+Average.df <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/monosIBSM_Averagemat_LOGNORMALISED_daycluster_300925.csv", row.names = 1)
+rownames(Average.df) <- Average.df$day_cluster
+str(Average.df)
+Average.df$day <- factor(Average.df$day, levels = c("day0", "day8", "day36"))
+Average.df$cluster <- factor(Average.df$cluster, levels = cMonocytes)
+#cMonocytes <- c("intMonocyte", "ncMonocyte", "CM1", "CM2", "CM3", "CM4") #If the matrix include Seurat metadata like donor, it will include all the monos. 
+
+#### Subsetting cluster (for example one heatmap per cluster)
+Average.sub <- Average.df[Average.df$cluster %in% c("CM1", "CM2", "CM3", "CM4"), ]
+#Average.Tfh1CM <- Average.Tfh1CM[Average.Tfh1CM$day %in% c("day0", "day16"), ]
+rownames(Average.sub) <- Average.sub$day_cluster
+#### okay now to reorder EVERYTHING... 
+
+my_order <- c("day0-CM1", "day0-CM1", "day0-CM1", "day0-CM1",
+              "day8-CM1", "day8-CM1", "day8-CM1", "day8-CM1",
+              "day36-CM1", "day36-CM1", "day36-CM1", "day36-CM1",
+              "day0-CM2", "day0-CM2", "day0-CM2", "day0-CM2",
+              "day8-CM2", "day8-CM2", "day8-CM2", "day8-CM2",
+              "day36-CM2", "day36-CM2", "day36-CM2", "day36-CM2",
+              "day0-CM3", "day0-CM3", "day0-CM3", "day0-CM3",
+              "day8-CM3", "day8-CM3", "day8-CM3", "day8-CM3",
+              "day36-CM3", "day36-CM3", "day36-CM3", "day36-CM3",
+              "day0-CM4", "day0-CM4", "day0-CM4", "day0-CM4",
+              "day8-CM4", "day8-CM4", "day8-CM4", "day8-CM4",
+              "day36-CM4", "day36-CM4", "day36-CM4", "day36-CM4")
+
+Average.sub <- Average.sub[match(my_order, rownames(Average.sub)), ]
+
+Average.sub <- Average.sub %>%
+  mutate(day = factor(day, levels = c("day0","day8","day36")),
+         cluster = factor(cluster, levels = cMonocytes )) %>%
+  arrange(cluster, day)
+
+#### Getting the gene list and selecting the top 10 per cluster/day ####
+# write.csv(psbDE_venn,"/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv")
+sigDGEs <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names=1)
+
+#Adding new name
+sigDGEs$cluster_name = factor(sigDGEs$cluster_name, levels = cMonocytes)
+
+sigDGEs<- sigDGEs[sigDGEs$day %in% c("day36","day8"),]
+
+# Ensure only the top 80 unique genes
+# merged_genes2 <- unique(merged_genes2[1:80])
+
+merged_genes1 <- sigDGEs %>%
+  mutate(clust_day = paste0(sigDGEs$cluster_name, "_", sigDGEs$day))%>%
+  filter(set %in% c("d8_only", "d36_only")) %>%
+  group_by(gene)%>%
+  mutate(n_clupgene = length(cluster_name)) %>%
+  ungroup() %>%
+  filter(n_clupgene >2) %>%
+  arrange(set, dplyr::desc(logFC)) 
+  
+merged_genes1$gene = gsub("-", ".", merged_genes1$gene)
+merged_genes2 <- unique(merged_genes1$gene)
+
+#### subsetting our selected genes
+dfsub_d816<- as.matrix(Average.sub[, colnames(Average.sub) %in% merged_genes2])
+
+dfsub_d816 <- as.matrix(dfsub_d816)
+dfsub_d816 = scale(dfsub_d816)
+
+col = list(Cluster = c("CM1" = "#9e0142",
+                       "CM2" = "#f4a582",
+                       "CM3" = "#5e4fa2",
+                       "CM4" = "#66c2a5"),
+            Day = c("day0" = "#bababa",
+                   "day8" = "#fdae61",
+                   "day36" = "blue"))
+
+# ##We got high medium and low expression, we want 3 colors
+# rng <- max(abs(dfsub_d816), na.rm = TRUE)  # or use abs(expr_z) if you built it
+# rng <- if (is.finite(rng) && rng > 0) rng else 1  # fallback
+
+# 3-color diverging palette: negative / zero / positive
+col_fun <- colorRamp2(
+  c(-2, 0, 4),
+  c("#2166AC", "#FFFFFF", "#B2182B")   # blue - white - red (swap colors if you want)
+)
+
+ha <- HeatmapAnnotation(Cluster=Average.sub$cluster,
+                        Day=Average.sub$day,
+                        col = col)
+
+col_split <- factor(Average.sub$cluster, levels = c("CM1","CM2","CM3","CM4"))
+
+row_split0 <- merged_genes1 %>% 
+  filter(gene %in% merged_genes2) %>%           # keep only genes in merged_genes2
+  select(gene, set) %>% 
+  distinct(gene, .keep_all = TRUE) %>%          # one row per gene
+  mutate(set = factor(set, levels = c("d8_only", "d36_only")))
+
+# Align 'set' to the heatmap row order (genes)
+gene_order <- rownames(t(dfsub_d816))                       # rows of the heatmap
+set_map    <- setNames(as.character(row_split0$set), row_split0$gene)
+row_set    <- factor(set_map[gene_order], levels = c("d8_only", "d36_only"))
+
+# Row annotation for 'set'
+row_ann <- rowAnnotation(
+  Set = row_set,
+  col = list(Set = c("d8_only" = "#fdae61", "d36_only" = "#0072B2")),
+  annotation_name_side = "top"
+)
+
+pdf(here("output/heatmap_uniqueD8orD36genes_avexpdaycluster_nrev1.pdf"), width = 8, height =10)
+Heatmap(
+  t(dfsub_d816),
+  name = "AvExpr", col = col_fun,
+  top_annotation = ha,
+  left_annotation = row_ann,                 # <<< add row annotation
+  cluster_rows = TRUE,                       # keep clustering order
+  show_row_dend = FALSE,                     # <<< hide row dendrogram graphic
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,                  # (explicit; no column dendrogram)
+  column_split = col_split,
+  column_gap = unit(4, "mm"),
+  row_split = row_set,                       # <<< split rows by set (d8_only / d36_only)
+  row_gap = unit(1, "mm"),
+  column_title = "Genes",
+  row_title = "Day-unique genes",
+  row_names_gp = gpar(fontsize = 6),
+  column_names_gp = gpar(fontsize = 4)
+)
+
+dev.off()
+
+
+```
+
+## Heatmap of significantly expressed genes on day 8 & day36 (intersect).
+Average expression per donor. 
+
+```{r heatmap of intersect genes expres per day_donor_cluster}
+
+Average.df <- read.csv(here("output/monosIBSM_Averagemat_LOGNORMALISED_daydonorcluster_230925.csv"), row.names = 1)
+
+rownames(Average.df) <- Average.df$day_donor_cluster
+
+# str(Average.df)
+Average.df$day <- factor(Average.df$day, levels = c("day0", "day8", "day36"))
+cMonocytes <- c("intMonocyte", "ncMonocyte", "CM1", "CM2", "CM3", "CM4") #If the matrix include Seurat metadata like donor, it will include all the monos. 
+Average.df$cluster <- factor(Average.df$cluster, levels = cMonocytes)
+
+#### Subsetting cluster (for example one heatmap per cluster)
+Average.sub <- Average.df[Average.df$cluster %in% c("CM1", "CM2", "CM3", "CM4"), ]
+
+rownames(Average.sub) <- Average.sub$day_donor_cluster
+#### okay now to reorder EVERYTHING... 
+
+my_order <- c("day0-donor0-CM1", "day0-donor1-CM1", "day0-donor2-CM1", "day0-donor3-CM1",
+              "day8-donor0-CM1", "day8-donor1-CM1", "day8-donor2-CM1", "day8-donor3-CM1",
+              "day36-donor0-CM1", "day36-donor1-CM1", "day36-donor2-CM1","day36-donor3-CM1",
+              "day0-donor0-CM2", "day0-donor1-CM2", "day0-donor2-CM2", "day0-donor3-CM2",
+              "day8-donor0-CM2", "day8-donor1-CM2", "day8-donor2-CM2", "day8-donor3-CM2",
+              "day36-donor0-CM2", "day36-donor1-CM2", "day36-donor2-CM2","day36-donor3-CM2",
+              "day0-donor0-CM3", "day0-donor1-CM3", "day0-donor2-CM3", "day0-donor3-CM3",
+              "day8-donor0-CM3", "day8-donor1-CM3", "day8-donor2-CM3", "day8-donor3-CM3",
+              "day36-donor0-CM3", "day36-donor1-CM3", "day36-donor2-CM3","day36-donor3-CM3",
+              "day0-donor0-CM4", "day0-donor1-CM4", "day0-donor2-CM4", "day0-donor3-CM4",
+              "day8-donor0-CM4", "day8-donor1-CM4", "day8-donor2-CM4", "day8-donor3-CM4",
+              "day36-donor0-CM4", "day36-donor1-CM4", "day36-donor2-CM4","day36-donor3-CM4")
+
+Average.sub <- Average.sub[match(my_order, rownames(Average.sub)), ]
+
+### now reoreder everything else I want as well...
+
+Average.sub <- Average.sub %>%
+  mutate(day = factor(day, levels = c("day0","day8","day36")),
+         cluster = factor(cluster, levels = cMonocytes ),
+         donor = factor(donor, levels = c("donor0", "donor1", "donor2", "donor3"))) %>%
+  arrange(cluster, day)
+
+#### Getting the gene list and selecting the top 10 per cluster/day ####
+# write.csv(psbDE_venn,"/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv")
+sigDGEs <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names=1)
+
+
+#Adding new name
+sigDGEs$cluster_name = factor(sigDGEs$cluster_name, levels = c("CM1","CM2","CM3","CM4"))
+
+sigDGEs<- sigDGEs[sigDGEs$day %in% c("day36","day8"),]
+
+merged_genes2 <-sigDGEs %>%
+  filter(set == "inter") %>%
+  arrange(dplyr::desc(logFC))
+
+merged_genes2 <- unique(merged_genes2$gene)
+
+#### subsetting our selected genes
+dfsub_d816<- as.matrix(Average.sub[, colnames(Average.sub) %in% merged_genes2])
+
+dfsub_d816 <- as.matrix(dfsub_d816)
+dfsub_d816 = scale(dfsub_d816)
+
+col = list(Cluster = c("CM1" = "#9e0142",
+                       "CM2" = "#f4a582",
+                       "CM3" = "#5e4fa2",
+                       "CM4" = "#66c2a5"),
+           Donor = c("donor0" = "#cb7a88",
+                     "donor1" = "#ccab7b",
+                     "donor2" = "#a3cb7a",
+                     "donor3" = "#7cbecc"),
+           Day = c("day0" = "#bababa",
+                   "day8" = "#fdae61",
+                   "day36" = "blue"))
+
+# ##We got high medium and low expression, we want 3 colors
+# rng <- max(abs(dfsub_d816), na.rm = TRUE)  # or use abs(expr_z) if you built it
+# rng <- if (is.finite(rng) && rng > 0) rng else 1  # fallback
+
+# 3-color diverging palette: negative / zero / positive
+col_fun <- colorRamp2(
+  c(-2, 0, 4),
+  c("#2166AC", "#FFFFFF", "#B2182B")   # blue - white - red (swap colors if you want)
+)
+
+ha <- HeatmapAnnotation(Cluster=Average.sub$cluster,
+                        Donor=Average.sub$donor,
+                        Day=Average.sub$day,
+                        col = col)
+
+col_split <- factor(Average.sub$cluster, levels = c("CM1","CM2","CM3","CM4"))
+
+
+pdf(here("output/heatmap_D8andD36sigGenes_avexpdaydonorcluster_nrev1.pdf"), width = 8, height =10)
+Heatmap(t(dfsub_d816),
+        name = "AvExpr", col=col_fun,
+        top_annotation = ha,
+        cluster_rows = TRUE,
+        cluster_columns = FALSE,
+        column_split = col_split,                 # <- split by cluster
+        column_gap = grid::unit(4, "mm"),         # <- space between clusters
+        # row_split = 2,
+        # row_gap = grid::unit(1,"mm"),
+        column_title = "Genes", row_title = "Samples",
+        row_names_gp = gpar(fontsize=6),
+        column_names_gp = gpar(fontsize=4))
+dev.off()
+
+
+```
+## Heatmap of uniquely expressed genes per day, in at least 3/4 subtypes.
+Average expression per donor. 
+
+###check the average mat is the daycluster mat not this one.!
+```{r heatmap of uniquely expressed genes per day}
+Average.df <- read.csv(here("output/monosIBSM_Averagemat_LOGNORMALISED_daydonorcluster_230925.csv"), row.names = 1)
+rownames(Average.df) <- Average.df$day_donor_cluster
+
+Average.df$day <- factor(Average.df$day, levels = c("day0", "day8", "day36"))
+cMonocytes <- c("intMonocyte", "ncMonocyte", "CM1", "CM2", "CM3", "CM4") #If the matrix include Seurat metadata like donor, it will include all the monos. 
+
+#### Subsetting cluster (for example one heatmap per cluster)
+Average.sub <- Average.df[Average.df$cluster %in% c("CM1", "CM2", "CM3", "CM4"), ]
+#Average.Tfh1CM <- Average.Tfh1CM[Average.Tfh1CM$day %in% c("day0", "day16"), ]
+rownames(Average.sub) <- Average.sub$day_cluster
+#### okay now to reorder EVERYTHING... 
+
+my_order <- c("day0-CM1", "day0-CM1", "day0-CM1", "day0-CM1",
+              "day8-CM1", "day8-CM1", "day8-CM1", "day8-CM1",
+              "day36-CM1", "day36-CM1", "day36-CM1", "day36-CM1",
+              "day0-CM2", "day0-CM2", "day0-CM2", "day0-CM2",
+              "day8-CM2", "day8-CM2", "day8-CM2", "day8-CM2",
+              "day36-CM2", "day36-CM2", "day36-CM2", "day36-CM2",
+              "day0-CM3", "day0-CM3", "day0-CM3", "day0-CM3",
+              "day8-CM3", "day8-CM3", "day8-CM3", "day8-CM3",
+              "day36-CM3", "day36-CM3", "day36-CM3", "day36-CM3",
+              "day0-CM4", "day0-CM4", "day0-CM4", "day0-CM4",
+              "day8-CM4", "day8-CM4", "day8-CM4", "day8-CM4",
+              "day36-CM4", "day36-CM4", "day36-CM4", "day36-CM4")
+
+Average.sub <- Average.sub[match(my_order, rownames(Average.sub)), ]
+
+### now reoreder everything else I want as well...
+# Average.sub$day <- factor(Average.sub$day, levels = c("day0","day8", "day36"))
+# Average.sub$donor <- factor(Average.sub$donor, levels = c("donor0", "donor1", "donor2", "donor3"))
+
+Average.sub <- Average.sub %>%
+  mutate(day = factor(day, levels = c("day0","day8","day36")),
+         cluster = factor(cluster, levels = cMonocytes )) %>%
+  arrange(cluster, day)
+
+#### Getting the gene list and selecting the top 10 per cluster/day ####
+# write.csv(psbDE_venn,"/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv")
+sigDGEs <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names=1)
+
+#Adding new name
+sigDGEs$cluster_name = factor(sigDGEs$cluster_name, levels = cMonocytes)
+
+sigDGEs<- sigDGEs[sigDGEs$day %in% c("day36","day8"),]
+
+# # Extract gene columns and merge
+# merged_genes2 <- unique(c(sort_genes_d8$gene, sort_genes_d36$gene))
+
+# Ensure only the top 80 unique genes
+# merged_genes2 <- unique(merged_genes2[1:80])
+
+merged_genes1 <- sigDGEs %>%
+  mutate(clust_day = paste0(sigDGEs$cluster_name, "_", sigDGEs$day))%>%
+  filter(set %in% c("d8_only", "d36_only")) %>%
+  group_by(gene)%>%
+  mutate(n_clupgene = length(cluster_name)) %>%
+  ungroup() %>%
+  filter(n_clupgene >2) %>%
+  arrange(set, dplyr::desc(logFC)) 
+  
+merged_genes1$gene = gsub("-", ".", merged_genes1$gene)
+merged_genes2 <- unique(merged_genes1$gene)
+
+#### subsetting our selected genes
+dfsub_d816<- as.matrix(Average.sub[, colnames(Average.sub) %in% merged_genes2])
+
+dfsub_d816 <- as.matrix(dfsub_d816)
+dfsub_d816 = scale(dfsub_d816)
+
+col = list(Cluster = c("CM1" = "#9e0142",
+                       "CM2" = "#f4a582",
+                       "CM3" = "#5e4fa2",
+                       "CM4" = "#66c2a5"),
+           Donor = c("donor0" = "#cb7a88",
+                     "donor1" = "#ccab7b",
+                     "donor2" = "#a3cb7a",
+                     "donor3" = "#7cbecc"),
+           Day = c("day0" = "#bababa",
+                   "day8" = "#fdae61",
+                   "day36" = "blue"))
+
+# ##We got high medium and low expression, we want 3 colors
+# rng <- max(abs(dfsub_d816), na.rm = TRUE)  # or use abs(expr_z) if you built it
+# rng <- if (is.finite(rng) && rng > 0) rng else 1  # fallback
+
+# 3-color diverging palette: negative / zero / positive
+col_fun <- colorRamp2(
+  c(-2, 0, 4),
+  c("#2166AC", "#FFFFFF", "#B2182B")   # blue - white - red (swap colors if you want)
+)
+
+ha <- HeatmapAnnotation(Cluster=Average.sub$cluster,
+                        Donor=Average.sub$donor,
+                        Day=Average.sub$day,
+                        col = col)
+
+col_split <- factor(Average.sub$cluster, levels = c("CM1","CM2","CM3","CM4"))
+
+row_split0 <- merged_genes1 %>% 
+  filter(gene %in% merged_genes2) %>%           # keep only genes in merged_genes2
+  select(gene, set) %>% 
+  distinct(gene, .keep_all = TRUE) %>%          # one row per gene
+  mutate(set = factor(set, levels = c("d8_only", "d36_only")))
+
+# Align 'set' to the heatmap row order (genes)
+gene_order <- rownames(t(dfsub_d816))                       # rows of the heatmap
+set_map    <- setNames(as.character(row_split0$set), row_split0$gene)
+row_set    <- factor(set_map[gene_order], levels = c("d8_only", "d36_only"))
+
+# Row annotation for 'set'
+row_ann <- rowAnnotation(
+  Set = row_set,
+  col = list(Set = c("d8_only" = "#fdae61", "d36_only" = "#0072B2")),
+  annotation_name_side = "top"
+)
+
+pdf(here("output/heatmap_uniqueD8orD36genes_avexpdaydonorcluster_nrev1.pdf"), width = 8, height =10)
+Heatmap(
+  t(dfsub_d816),
+  name = "AvExpr", col = col_fun,
+  top_annotation = ha,
+  left_annotation = row_ann,                 # <<< add row annotation
+  cluster_rows = TRUE,                       # keep clustering order
+  show_row_dend = FALSE,                     # <<< hide row dendrogram graphic
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,                  # (explicit; no column dendrogram)
+  column_split = col_split,
+  column_gap = unit(4, "mm"),
+  row_split = row_set,                       # <<< split rows by set (d8_only / d36_only)
+  row_gap = unit(1, "mm"),
+  column_title = "Genes",
+  row_title = "Day-unique genes",
+  row_names_gp = gpar(fontsize = 6),
+  column_names_gp = gpar(fontsize = 4)
+)
+
+dev.off()
+```
+
+```{r plots ATACseq for publications}
+#Reading significant genes
+# degs <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/DreamSVA_DAA_100925_fit3correct.csv")
+
+degs <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/DreamSVA_DAA_100925_fit3correct_nod15.csv")
+
+head(degs)
+#Reading raw counts
+counts_df <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/annotated_peak_counts.csv")
+#List of genes to highlight via boxplots and 
+imp_genes <- c("TNF", "IL1B", "IL6", "NFKB2", "HLA-DRA", "CCL2", "CXCL9", "CXCL10", "CXCL11")
+
+degs_sub <- degs[degs$genes %in% imp_genes,]
+unique(degs_sub$genes)
+
+counts_df_sub <- counts_df[counts_df$SYMBOL %in% imp_genes,]
+unique(counts_df_sub$SYMBOL)
+```
+
+```{r formatting data for boxplot but removing day 15}
+counts_df_sub_long = counts_df_sub %>%
+  select(SYMBOL, R11003_d0, R11003_d8, R11003_d15,
+         R11003_d27, R102_d0, R102_d8, R102_d15, R108_d0,
+         R108_d8, R108_d15, R108_d27, R11001_d0, R11001_d8,
+         R11001_d15, R11001_d27, R31002_d0, R31002_d8,
+         R31002_d15, R31002_d27, R105_d0, R105_d8, R105_d15, R105_d27)%>%
+  pivot_longer(!SYMBOL, names_to = "sample_id", values_to = "count") %>%
+  separate(col=sample_id, into = c("sample", "day"), sep="_", remove = FALSE)
+
+counts_df_sub_long$day <- factor(counts_df_sub_long$day, label=c("d0", "d8", "d15", "d27"))
+```
+
+```{r boxplot for important genes}
+col = c("d0" = "#ffffcc",
+        "d8" = "#a1dab4",
+        "d15" = "#41b6c4",
+        "d27" = "#225ea8")
+
+##Version 2
+pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/plots_for_paper/Boxplot_ATACseq_chmi_1_m_logcounts_v2.pdf", width = 10, height = 5)
+ggplot(counts_df_sub_long, aes(x = day, y = log1p(count), fill = day)) +
+  geom_boxplot(width = 0.6, outlier.shape = NA) +
+  geom_point(
+    shape = 21,                # filled circle w/ border
+    color = "black",           # border color
+    stroke = 0.35,             # border thickness
+    position = position_jitter(width = 0.15, height = 0),
+    size = 1.8,
+    alpha = 0.7,
+    show.legend = FALSE
+  ) +
+  scale_fill_manual(values = col) +
+  facet_wrap(~ SYMBOL, nrow = 2) +
+  theme_bw() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  ) +
+  labs(y = "log1p(count)")
+dev.off()
+```
+
+```{r boxplot by donor_peak points and no day15}
+degs_nd15 <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/DreamSVA_DAA_100925_fit3correct_nod15.csv")
+
+head(degs)
+#Reading raw counts
+counts_df <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/annotated_peak_counts.csv")
+counts_df_nd15 <- counts_df %>% dplyr::select(-ends_with("d15"))
+#
+#List of genes to highlight via boxplots and 
+# imp_genes <- c("TNF", "IL1B", "IL6", "NFKB2", "IFNG", "HLA-DRA", "CCL2", "CXCL9", "CXCL10", "CXCL11")
+
+degs_sub_nd15 <- degs[degs$genes %in% c("HLA-DRA"),]
+unique(degs_sub$genes)
+
+counts_df_nd15_sub <- counts_df_nd15[counts_df_nd15$SYMBOL %in% c("HLA-DRA"),]
+unique(counts_df_nd15_sub$SYMBOL)
+
+counts_df_nd15_sub_long <- counts_df_nd15_sub %>%
+  select(
+    SYMBOL, GeneID,
+    R11003_d0, R11003_d8, R11003_d27,
+    R102_d0,  R102_d8,
+    R108_d0,  R108_d8,  R108_d27,
+    R11001_d0, R11001_d8, R11001_d27,
+    R31002_d0, R31002_d8, R31002_d27,
+    R105_d0,  R105_d8,  R105_d27
+  ) %>%
+  pivot_longer(
+    cols = -c(SYMBOL, GeneID),
+    names_to = "sample_id",
+    values_to = "count"
+  ) %>%
+  separate(sample_id, into = c("sample", "day"), sep = "_", remove = FALSE) %>%
+  mutate(
+    GeneID = as.character(GeneID),              # ensure character
+    peak_sample = paste0(GeneID, "_", sample)   # e.g., peak123_R11003
+  ) %>%
+  relocate(peak_sample, .after = GeneID)
+
+counts_df_nd15_sub_long$day <- factor(counts_df_nd15_sub_long$day, label=c("d0", "d8", "d27"))
+col = c("d0" = "#a1dab4",
+        "d8" = "#41b6c4",
+        "d27" = "#225ea8")
+
+colz2 <- c("R11003"="#8c510a" ,"R102"= "#d8b365" ,"R108"=  "#543005", "R11001"="#003c30" ,"R31002"= "#5ab4ac","R105"= "#01665e")
+
+cols_for_points <- colz2[ sub(".*_", "", counts_df_nd15_sub_long$peak_sample) ]
+
+names(cols_for_points) <- counts_df_nd15_sub_long$peak_sample
+
+```
+
+```{plotting boxplot by donor_peak and no day15}
+# pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/plots_for_paper/Boxplot_ATACseq_chmi_1_m_logcounts_v3peak_sample.pdf", width = 10, height = 5)
+# # ensure day is ordered (optional)
+# ggplot(counts_df_nd15_sub_long, aes(x = day, y = log1p(count))) +
+#   geom_boxplot(width = 0.6, outlier.shape = NA) +
+# 
+#   # connect the same peak_sample across days
+#   geom_line(aes(group=peak_sample),
+#             color = cols_for_points,
+#             alpha = 0.5,
+#             linewidth = 1) +
+#   geom_point(
+#     aes(group=peak_sample),
+#     shape = 21,
+#     color = cols_for_points,
+#     fill= cols_for_points, 
+#     stroke = 0.35,
+#     position = position_dodge(width = 0.15),
+#     size = 1.8,
+#     alpha = 0.7,
+#     show.legend = FALSE
+#   ) +
+#   scale_fill_manual(values = col) +
+#   facet_wrap(~ SYMBOL, nrow = 2) +
+#   theme_bw() +
+#   theme(
+#     axis.title.x = element_blank(),
+#     axis.text.x  = element_blank(),
+#     axis.ticks.x = element_blank()
+#   ) +
+#   labs(y = "log1p(count)")
+# 
+# dev.off()
+# 
+# ## version2
+day_pal <- c("d0" = "#a1dab4", "d8" = "#41b6c4", "d27" = "#225ea8")
+colz2   <- c(R11003="#8c510a", R102="#d8b365", R108="#543005",
+             R11001="#003c30", R31002="#5ab4ac", R105="#01665e")
+
+#Version 3 is the winner
+### version 3 ####
+pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/plots_for_paper/Boxplot_ATACseq_chmi_1_m_logcounts_v3peak_sample_v3.pdf", width = 10, height = 5)
+ggplot() +
+  # 1) Boxplots: FILL by Day
+  geom_boxplot(
+    data = df,
+    aes(x = day, y = log1p(count), fill = day),
+    width = 0.6, outlier.shape = NA, colour = "grey30"
+  ) +
+  scale_fill_manual(values = day_pal, name = "Day") +
+
+  # Lines connecting the same peak across days (color by Sample)
+  geom_line(
+    data = df %>% arrange(peak_sample, day),
+    aes(x = day, y = log1p(count), group = peak_sample, colour = sample),
+    alpha = 0.6, linewidth = 0.6
+  ) +
+  # Points in the SAME color as lines (color by Sample)
+  geom_point(
+    data = df,
+    aes(x = day, y = log1p(count), colour = sample),
+    size = 1.8, alpha = 0.8
+  ) +
+  # Sample legend
+  scale_color_manual(values = colz2, name = "Sample") +
+
+  facet_wrap(~ sample, nrow = 2) +
+  theme_bw() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  ) +
+  labs(y = "log1p(count)", title = "HLA-DRA")
+dev.off()
+```
+
+```{r plotting upreg genes on day 8 and day 36 in scRNAseq}
+up_scRNA_g = c("TNFSF10", "FCGR1B", "PML", "SCIMP", "GIMAP7", "GIMAP4", "RSBN1L", "GPN3","SMCO4")
+
+counts_df_nd15_sub1 <- counts_df_nd15[counts_df_nd15$SYMBOL %in% up_scRNA_g,]
+unique(counts_df_nd15_sub1$SYMBOL)
+
+counts_df_nd15_sub1_long <- counts_df_nd15_sub1 %>%
+  select(
+    SYMBOL, GeneID,
+    R11003_d0, R11003_d8, R11003_d27,
+    R102_d0,  R102_d8,
+    R108_d0,  R108_d8,  R108_d27,
+    R11001_d0, R11001_d8, R11001_d27,
+    R31002_d0, R31002_d8, R31002_d27,
+    R105_d0,  R105_d8,  R105_d27
+  ) %>%
+  pivot_longer(
+    cols = -c(SYMBOL, GeneID),
+    names_to = "sample_id",
+    values_to = "count"
+  ) %>%
+  separate(sample_id, into = c("sample", "day"), sep = "_", remove = FALSE) %>%
+  mutate(
+    GeneID = as.character(GeneID),              # ensure character
+    peak_sample = paste0(GeneID, "_", sample)   # e.g., peak123_R11003
+  ) %>%
+  relocate(peak_sample, .after = GeneID)
+
+counts_df_nd15_sub1_long$day <- factor(counts_df_nd15_sub1_long$day, label=c("d0", "d8", "d27"))
+
+df <- counts_df_nd15_sub1_long
+```
+
+```{plotting boxplot for upregulated genes on day8 and day36 by donor_peak and no day15}
+
+#Version 3 is the winner
+### version 3 ####
+pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/plots_for_paper/Boxplot_ATACseq_chmi_1_m_logcounts_v3peak_sample_v3_UpGenesD8D36sc.pdf", width = 16, height = 12)
+ggplot() +
+  # 1) Boxplots: FILL by Day
+  geom_boxplot(
+    data = df,
+    aes(x = day, y = log1p(count), fill = day),
+    width = 0.6, outlier.shape = NA, colour = "grey30"
+  ) +
+  scale_fill_manual(values = day_pal, name = "Day") +
+
+  # Lines connecting the same peak across days (color by Sample)
+  geom_line(
+    data = df %>% arrange(peak_sample, day),
+    aes(x = day, y = log1p(count), group = peak_sample, colour = sample),
+    alpha = 0.6, linewidth = 0.6
+  ) +
+  # Points in the SAME color as lines (color by Sample)
+  geom_point(
+    data = df,
+    aes(x = day, y = log1p(count), colour = sample),
+    size = 1.8, alpha = 0.8
+  ) +
+  # Sample legend
+  scale_color_manual(values = colz2, name = "Sample") +
+
+  facet_wrap(sample ~ SYMBOL, nrow = 6) +
+  theme_bw() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  ) +
+  labs(y = "log1p(count)", title = "chromatine changes on scRNAseq Up-regulated genes on day 8 & day 36")
+dev.off()
+```
+
+```{r genes upregulated on day36 only }
+unique_d36up =c("IRF2", "GIMAP8", "HSPA1A","HIST1H1E", "IFI27", "HIST1H4C", "HIST2H2AC",
+"HIST1H1D", "GAPT")
+##other names for HIST1H1E = H1-4, HIST1H4C = H4C3| HIST2H2AC= H2AC20 |HIST1H1D = H1-3
+
+unique_d36up =c("IRF2", "GIMAP8", "HSPA1A","H1-4", "IFI27", "H4C3", "H2AC20", "H1-3", "GAPT")
+counts_df_nd15_sub2 <- counts_df_nd15[counts_df_nd15$SYMBOL %in% unique_d36up,]
+unique(counts_df_nd15_sub2$SYMBOL)
+
+counts_df_nd15_sub2_long <- counts_df_nd15_sub2 %>%
+  select(
+    SYMBOL, GeneID,
+    R11003_d0, R11003_d8, R11003_d27,
+    R102_d0,  R102_d8,
+    R108_d0,  R108_d8,  R108_d27,
+    R11001_d0, R11001_d8, R11001_d27,
+    R31002_d0, R31002_d8, R31002_d27,
+    R105_d0,  R105_d8,  R105_d27
+  ) %>%
+  pivot_longer(
+    cols = -c(SYMBOL, GeneID),
+    names_to = "sample_id",
+    values_to = "count"
+  ) %>%
+  separate(sample_id, into = c("sample", "day"), sep = "_", remove = FALSE) %>%
+  mutate(
+    GeneID = as.character(GeneID),              # ensure character
+    peak_sample = paste0(GeneID, "_", sample)   # e.g., peak123_R11003
+  ) %>%
+  relocate(peak_sample, .after = GeneID)
+
+counts_df_nd15_sub2_long$day <- factor(counts_df_nd15_sub2_long$day, label=c("d0", "d8", "d27"))
+
+df <- counts_df_nd15_sub2_long
+
+```
+
+```{plotting boxplot for upregulated genes on day36 only by donor_peak and no day15}
+
+#Version 3 is the winner
+### version 3 ####
+pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/plots_for_paper/Boxplot_ATACseq_chmi_1_m_logcounts_v3peak_sample_v3_UpGenesD36onlysc.pdf", width = 16, height = 12)
+ggplot() +
+  # 1) Boxplots: FILL by Day
+  geom_boxplot(
+    data = df,
+    aes(x = day, y = log1p(count), fill = day),
+    width = 0.6, outlier.shape = NA, colour = "grey30"
+  ) +
+  scale_fill_manual(values = day_pal, name = "Day") +
+
+  # Lines connecting the same peak across days (color by Sample)
+  geom_line(
+    data = df %>% arrange(peak_sample, day),
+    aes(x = day, y = log1p(count), group = peak_sample, colour = sample),
+    alpha = 0.6, linewidth = 0.6
+  ) +
+  # Points in the SAME color as lines (color by Sample)
+  geom_point(
+    data = df,
+    aes(x = day, y = log1p(count), colour = sample),
+    size = 1.8, alpha = 0.8
+  ) +
+  # Sample legend
+  scale_color_manual(values = colz2, name = "Sample") +
+
+  facet_wrap(sample ~ SYMBOL, nrow = 6) +
+  theme_bw() +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank()
+  ) +
+  labs(y = "log1p(count)", title = "chromatine changes on scRNAseq Up-regulated genes on day 8 & day 36")
+dev.off()
+```
+
+
+```{r risk plot for fold change}
+
+combined_top_tables <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/DreamSVA_DAA_100925_fit3correct_nod15_ci95.csv")
+
+## Natalie genes version 1
+int_genes = c("IL1B", "IL6", "IL10", "IL12", "TNF", "IFNB", "IFNA4", "IFNA2", "IFNA3")
+up_Day36only = c("IRF2", "GIMAP8", "HSPA1A","HIST1H1E", "IFI27", "HIST1H4C", "HIST2H2AC",
+"HIST1H1D", "GAPT")
+imp_genes <- c("TNF", "IL1B", "IL6", "NFKB2", "HLA-DRA", "CCL2", "CXCL9", "CXCL10", "CXCL11")
+
+plot_df_s <- combined_top_tables%>%
+  filter(Coefficient %in% c("groupd8", "groupd27"),
+         genes %in% imp_genes)%>%
+  mutate(Day = case_when(Coefficient == "groupd8" ~ "Day0 vs Day8",
+                         Coefficient == "groupd27" ~ "Day0 vs Day27"),
+         FC     = 2^logFC,
+         FC_lwr = 2^CI.L,
+         FC_upr = 2^CI.R) %>%
+  arrange(adj.P.Val) %>%
+  group_by(Day) %>%
+  ungroup()
+
+plot_df_s$Day <- factor(plot_df_s$Day, levels=c("Day0 vs Day8", "Day0 vs Day27"))
+
+# Keep only gene–day combinations that exist
+plot_df_s_clean <- plot_df_s %>%
+  filter(!is.na(FC), !is.na(genes), !is.na(Day)) %>%
+  group_by(genes, Day) %>%
+  filter(n() > 0) %>%
+  ungroup()
+
+
+# ggplot(plot_df_s_clean, aes(x = GeneID, y = FC)) +
+#   geom_point() +
+#   geom_errorbar(aes(ymin = FC_lwr, ymax = FC_upr), width = 0.2) +
+#   coord_flip() +
+#   scale_y_log10() +
+#   ylab("Fold change") +
+#   xlab("Peak") +
+#   theme_bw() +
+#   facet_grid(genes ~ Day, drop = TRUE, scales = "free_y", space = "free_y") +
+#   theme(
+#     legend.position = "none",
+#     axis.text.y = element_blank(),
+#     axis.ticks.y = element_blank(),
+#     axis.title.y = element_blank()
+#   )
+
+
+
+####Version 2 
+day_pal2 <- c("#b8e186", "#018571")
+pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/plots_for_paper/ATAC_FC_monocytes__interesgenes_ci95.pdf", height = 12, width = 8)
+ggplot(plot_df_s_clean, aes(x = GeneID, y = FC, group = Day, colour = Day)) +
+  geom_point(position = position_dodge(width = 0.9),
+             data = plot_df_s_clean,
+             aes(x = GeneID, y = FC),size = 2) + 
+  geom_errorbar(data = plot_df_s_clean,
+                aes(ymin = FC_lwr, ymax = FC_upr), colour = "black",
+                position = position_dodge(width = 0.9),width = 0.3, alpha=0.8) +
+    geom_hline(yintercept = 1, linetype = "solid", color = "red", size = 0.5)+
+  scale_color_manual(values = day_pal2, name = "Day") +
+  coord_flip() +
+  scale_y_log10() +
+  ylab("Fold change") +
+  xlab("Peak") +
+  theme_light() +
+  facet_grid(genes~Day, drop = TRUE, scales = "free_y", space = "free_y") +
+  theme(
+    legend.position = "right",        # show legend
+    axis.text.y = element_text(size = 6, hjust = 0),  # small peak labels
+    axis.ticks.y = element_line(size = 0.3),
+    axis.title.y = element_blank(),
+    strip.text = element_text(size = 10)
+  )
+dev.off()
+
+##Version 3
+pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/plots_for_paper/ATAC_FC_monocytes__interesgenes_ci95_v3.pdf", height = 10, width = 8)
+ggplot(plot_df_s_clean, aes(x = GeneID, y = FC, group = Day, colour = Day)) +
+  geom_point(
+    position = position_dodge(width = 0.9),
+    size = 2
+  ) +
+  geom_errorbar(
+    aes(ymin = FC_lwr, ymax = FC_upr),
+    colour = "black",
+    position = position_dodge(width = 0.9),
+    width = 0.3
+  ) +
+  scale_color_manual(values = day_pal2, name = "Day") +
+  coord_flip(clip = "off") +   # ensures labels aren't cut off
+  scale_y_log10() +
+  ylab("Fold change") +
+  xlab(NULL) +
+  theme_bw(base_size = 10) +
+  facet_grid(~genes, drop = TRUE, scales = "free_y", space = "free_y") +
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 9),
+    legend.text  = element_text(size = 8),
+    axis.text.y  = element_text(size = 6, hjust = 0),
+    axis.ticks.y = element_blank(),
+    axis.title.y = element_blank(),
+    strip.text   = element_text(size = 9, margin = margin(0, 0, 1, 0)),
+    panel.spacing = unit(0.05, "lines"),       # tight facet spacing
+    plot.margin   = margin(2, 2, 2, 2, "pt")   # small outer margins
+  )
+dev.off()
+```
+
+#PCA from ATACseq data
+```{r ATACseq PCA from modelled data}
+##Reading data
+
+metall_dglis_t = read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/data4PCA.csv",row.names = 1)
+
+#Compute PCA
+res.pca <- prcomp(metall_dglis_t, scale = TRUE)
+metall_dglis_t_sub<-metall_dglis_t%>%select(group,batch,Replicate)%>%
+  mutate(group=case_when(
+    group==1 ~ "d0",
+    group==2 ~ "d8",
+    group==3 ~ "d27"),
+         sample_id=paste0(Replicate,"_",group))
+# Create a data frame for ggplot2
+pca_metadata <- data.frame(PC1 = res.pca$x[,1], PC2 = res.pca$x[,2], SampleID = metall_dglis_t_sub$sample_id, Group = metall_dglis_t_sub$group, Batch = metall_dglis_t_sub$batch, Sample = metall_dglis_t_sub$Replicate)
+##Creating factors
+pca_metadata <- pca_metadata%>%
+  mutate(SampleID = as.factor(SampleID),
+         Group = factor(Group, levels=c("d0", "d8", "d27")),
+         Batch = as.factor(Batch),
+         Sample = paste0("R",Sample),
+         Sample = as.factor(Sample))
+
+# "d0"= "#bababa", 
+# Plot
+colz <- c("d0"="#fdae61",  "d8"="darkgreen", "d27"="blue")
+#colz <- c("d0"= "darkred", "d8"="darkblue",  "d15"="darkgreen", "d27"="lightblue")
+
+pca_nosva <- ggplot(pca_metadata, aes(x = PC1, y = PC2, color = Group, shape = Batch)) +  # Added shape = Group
+ geom_point(size = 4) +
+ xlab(paste0("PC1: ", round(summary(res.pca)$importance[2,1] * 100, 2), "% variance")) +
+ ylab(paste0("PC2: ", round(summary(res.pca)$importance[2,2] * 100, 2), "% variance")) +
+ scale_color_manual(values = colz) +
+ scale_shape_manual(values = c(16, 17))+  # Added shape scale
+ theme_bw()
+
+# Plot the PCA
+ pca_nosva
+# Save it
+ ggsave(pca_nosva, filename = "/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/Variance_analysis/PCA_Peaks_timepoint_nd15.pdf",  width = 7, height = 5, dpi = 600,scale = 1)
+```
+
+
+###PCA with ellipse
+
+```{r ATACseq PCA main fig days with elipse}
+# time-ordered, colorblind-friendly palette
+colz3 <- c(
+  "d0"  = "#56B4E9",  # sky blue
+  "d8" = "#009E73",  # bluish green
+  "d27" = "#D55E00"   # vermillion
+)
+
+# matching, slightly lighter fills for ellipses
+fillz3 <- c(
+  "d0"  = "#A6D7F2",
+  "d8" = "#7FD7B5",
+  "d27" = "#F3A476"
+)
+
+pca_nosva5 <- ggplot(pca_metadata, aes(PC1, PC2)) +
+  # axes
+  geom_hline(yintercept = 0, colour = "grey60", linewidth = 0.3) +
+  geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.3) +
+
+  # ellipses (filled + outline)
+  stat_ellipse(
+    aes(color = Group, fill = Group),
+    geom   = "polygon",
+    alpha  = 0.20,
+    linewidth = 0.6,
+    level  = 0.95
+  ) +
+
+  # sample points: filled symbols with black edge
+  geom_point(
+    aes(fill = Group, shape = Group),
+    size   = 4,
+    colour = "black",
+    stroke = 0.4
+  ) +
+
+  # group means: larger black “x”
+stat_summary(
+    data = pca_metadata,
+    aes(x = PC1, y = PC2, group = Group),
+    fun = mean,
+    geom = "point",
+    shape = 1,
+    size = 0,
+    stroke = 0,
+    inherit.aes = FALSE)+
+
+# labels
+  xlab(paste0("PC1: ", round(summary(res.pca)$importance[2, 1] * 100, 2), "% variance")) +
+  ylab(paste0("PC2: ", round(summary(res.pca)$importance[2, 2] * 100, 2), "% variance")) +
+
+  # manual scales
+  scale_color_manual(values = colz3) +
+  scale_fill_manual(values  = fillz3) +
+  scale_shape_manual(values = c("d0" = 21, "d8" = 21, "d27" = 21)) +
+
+  # clean theme
+  theme_bw(base_size = 11) +
+  theme(
+    panel.grid.major = element_line(colour = "grey90", linewidth = 0.3),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(face = "bold"),
+    legend.title = element_blank(),
+    legend.background = element_rect(fill = "white", colour = "grey70"),
+    legend.key = element_rect(fill = NA)
+  )
+pca_nosva5
+pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/Variance_analysis/PCA_Peaks_timepoint_chmi1_m_v2_elipse1_main_090226.pdf",  width = 7, height = 5)
+pca_nosva5
+dev.off()
+```
+##Supp figures with days as color and samples as shape
+
+```{r ATACseq PCA supp fig days with elipse}
+# time-ordered, colorblind-friendly palette
+# 
+# colz4 <- c("R11003"="#8c510a" ,"R102"= "#d8b365" ,"R108"=  "#543005", "R11001"="#003c30" ,"R31002"= "#5ab4ac","R105"= "#01665e")
+
+colz4 <- c("R11003"="#bcbddc","R102"= "#d8b365" ,"R108"=  "#543005", "R11001"="#003c30" ,"R31002"= "#5ab4ac","R105"= "#54278f")
+
+# matching, slightly lighter fills for ellipses
+library(colorspace)
+fillz4 <- lighten(colz4, amount = 0.6)
+
+pca_nosva6 <- ggplot(pca_metadata, aes(PC1, PC2)) +
+  # axes
+  geom_hline(yintercept = 0, colour = "grey60", linewidth = 0.3) +
+  geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.3) +
+
+  # ellipses (filled + outline)
+  stat_ellipse(
+    aes(color = Sample, fill = Sample),
+    geom   = "polygon",
+    alpha  = 0.20,
+    linewidth = 0.6,
+    level  = 0.95
+  ) +
+
+  # sample points: filled symbols with black edge
+  geom_point(
+    aes(fill = Group, shape = Sample),
+    size   = 4,
+    colour = "black",
+    stroke = 0.4
+  ) +
+
+  # group means: larger black “x”
+stat_summary(
+    data = pca_metadata,
+    aes(x = PC1, y = PC2, group = Sample),
+    fun = median,
+    geom = "point",
+    shape = 1,
+    size = 0,
+    stroke = 0,
+    inherit.aes = FALSE)+
+
+# labels
+  xlab(paste0("PC1: ", round(summary(res.pca)$importance[2, 1] * 100, 2), "% variance")) +
+  ylab(paste0("PC2: ", round(summary(res.pca)$importance[2, 2] * 100, 2), "% variance")) +
+
+  # manual scales
+  scale_color_manual(values = colz4) +
+  scale_fill_manual(values  = fillz3) +
+  scale_shape_manual(values = c("R11003" = 7, "R102" = 22, "R108" = 23,
+                                "R11001"=24, "R31002"=25, "R105"=21)) +
+
+  # clean theme
+  theme_bw(base_size = 11) +
+  theme(
+    panel.grid.major = element_line(colour = "grey90", linewidth = 0.3),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(face = "bold"),
+    legend.title = element_blank(),
+    legend.background = element_rect(fill = "white", colour = "grey70"),
+    legend.key = element_rect(fill = NA)
+  )
+
+pca_nosva6
+###Too few points to calculate ellipse, we're circumvecting this
+
+library(factoextra)
+library(ggforce)
+
+
+pca_nosva7 <- fviz_pca_ind(res.pca, 
+             label='none',
+             alpha.ind = 0.5,
+             habillage=pca_metadata$Sample,
+             repel = TRUE,
+             palette = colz4,
+             # Don't use default Ellipses!!!!
+             # addEllipses = TRUE,
+             invisible='quali') +
+  geom_point(aes(shape=pca_metadata$Group, fill=pca_metadata$Sample),size=3) +
+  scale_shape_manual(values = c("d0" = 22, "d8" = 23, "d27" = 24)) +
+  guides(fill = "none")+
+  # ADD ggforce's ellipses
+  ggforce::geom_mark_ellipse(aes(color = Groups)) +
+theme_bw(base_size = 11) +
+  theme(legend.position = "bottom",
+    panel.grid.major = element_line(colour = "grey90", linewidth = 0.5),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(face = "bold"),
+    legend.title = element_blank(),
+    legend.background = element_rect(fill = "white", colour = "grey70"),
+    legend.key = element_rect(fill = NA))+
+    coord_fixed(xlim = c(-500, 800), ylim = c(150,-250))
+
+pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/chmi_1_m/plots_for_paper/PCA_Peaks_timepoint_chmi1_m_v2_elipsebySample_090226_sup.pdf",  width = 7, height = 7)
+pca_nosva7
+dev.off()
+
+```
+
+
+```{r lets try complex heatmap for shared genes on day 8 and day 36}
+##getting the data
+psbDE_venn0<- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names = 1)
+
+
+psbDE_venn2 <- psbDE_venn0 %>%
+  mutate(
+    groups = case_when(
+      set == "d8_only" ~ paste0(cluster_name, ".","d8"),
+      set == "d36_only" ~ paste0(cluster_name, ".","d36"),
+      set == "inter" ~ paste0(cluster_name, ".","d8&",cluster_name,".","d36"),
+    TRUE ~ NA_character_),
+    groups = factor(groups, levels=c("CM1.d8", "CM1.d36","CM1.d8&CM1.d36",
+                                   "CM2.d8", "CM2.d36", "CM2.d8&CM2.d36",
+                                   "CM3.d8", "CM3.d36",  "CM3.d8&CM3.d36",
+                                   "CM4.d8", "CM4.d36", "CM4.d8&CM4.d36")),
+    groups2 = case_when(
+      groups == "CM1.d8&CM1.d36" & day == "day8" ~ "CM1.d8",
+      groups == "CM1.d8&CM1.d36" & day == "day36" ~ "CM1.d36",
+      groups == "CM2.d8&CM2.d36" & day == "day8" ~ "CM2.d8",
+      groups == "CM2.d8&CM2.d36" & day == "day36" ~ "CM2.d36",
+      groups == "CM3.d8&CM3.d36" & day == "day8" ~ "CM3.d8",
+      groups == "CM3.d8&CM3.d36" & day == "day36" ~ "CM3.d36",
+      groups == "CM4.d8&CM4.d36" & day == "day8" ~ "CM4.d8",
+      groups == "CM4.d8&CM4.d36" & day == "day36" ~ "CM4.d36",
+      TRUE ~ groups))
+
+psbDE_venn2.ls = split(psbDE_venn2$gene, f=psbDE_venn2$groups2)
+
+##drawing the plot
+m = make_comb_mat(psbDE_venn2.ls, mode = "intersect")
+set_name(m)
+#"CM1.d36" "CM1.d8"  "CM2.d36" "CM2.d8"  "CM3.d36" "CM3.d8"  "CM4.d36" "CM4.d8" 
+comb_name(m)
+m2 <- m[, c("10000000","01000000","11000000",
+            "00100000","00010000","00110000",
+            "00001000","00000100","00001100",
+            "00000010","00000001", "00000011")]
+set_cols =
+c("CM1.d8"  = "#9e0142",
+  "CM1.d36" = "#9e0142",
+  "CM2.d8" = "#f4a582",
+  "CM2.d36" = "#f4a582",
+  "CM3.d8" = "#5e4fa2",
+  "CM3.d36" = "#5e4fa2",
+  "CM4.d8" = "#66c2a5",
+  "CM4.d36" = "#66c2a5")
+##Getting the up/down table
+
+gene_dir <- psbDE_venn2 %>%
+  distinct(gene, day, dir_sig) %>%
+  group_by(gene) %>%
+  summarise(
+    dir_sig = ifelse(any(dir_sig == "down"), "down", "up"),
+    .groups = "drop"
+  )
+
+cn <- comb_name(m2)
+
+# FIX: extract_comb needs index, not name
+genes_by_comb <- lapply(cn, function(nm) extract_comb(m2, nm))
+names(genes_by_comb) <- cn
+
+stack_counts <- do.call(rbind, lapply(genes_by_comb, function(g) {
+  idx <- match(g, gene_dir$gene)
+  d <- gene_dir$dir_sig[idx]
+  d <- d[!is.na(d)]
+  c(
+    down = sum(d == "down"),
+    up   = sum(d == "up")
+  )
+}))
+rownames(stack_counts) <- cn
+
+lab_du_2 <- paste0(stack_counts[, "down"], "/", stack_counts[, "up"])
+
+ha_stack <- HeatmapAnnotation (
+  "Intersection size (up/down)" = anno_barplot(
+    stack_counts,
+    show_legend = TRUE,
+    show_annotation_name = TRUE,
+    beside = FALSE,
+    border = FALSE,
+    gp = gpar(fill = c(down = "#377eb8", up = "#4daf4a")),
+    axis_param = list(gp = gpar(fontsize = 12)),
+    height = unit(6, "cm"),
+    width = unit(10,"cm"),
+    add_numbers = TRUE,
+    annotation_name_side = "right",
+    annotation_name_rot = 0
+  ),
+   "down/up" = anno_text(lab_du_2, rot = 90, gp = gpar(fontsize = 9))
+)
+
+pdf("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/training_monos_data4graphs/UpsetR_DEGs_D8D36_shareIntes_freq_withupdown.pdf", h=8, w =8)
+UpSet(
+  m2,
+  pt_size = unit(5, "pt"),
+  lwd = unit(2, "pt"),
+  top_annotation = ha_stack, 
+  right_annotation = upset_right_annotation(
+    m2,
+    add_numbers = TRUE,
+    gp = gpar(fill = set_cols),
+    annotation_name_side = "top",
+    axis_param = list(side = "top"),
+  row_names_gp = gpar(fontsize = 4), #changes font size of "set size" labels
+                     width = unit(182, units = "pt"),
+                     heatmap_height = unit(65, units = "pt")
+  )
+  )
+dev.off()
+
+##Getting a csv with the gene names per instersection
+genes_tbl_d <- bind_rows(lapply(names(genes_by_comb), function(id) {
+  tibble(
+    intersection = id,
+    gene = genes_by_comb[[id]]
+  )
+}))
+
+set_levels <- set_name(m2)
+##Function to decode information
+decode_intersection <- function(bitstring, sets) {
+  bits <- strsplit(bitstring, "")[[1]] == "1"
+  paste(sets[bits], collapse = "&")
+}
+
+genes_tbl_d <- genes_tbl_d %>%
+  mutate(
+    set_name = vapply(
+      intersection,
+      decode_intersection,
+      character(1),
+      sets = set_levels
+    )
+  )
+write.csv(genes_tbl_d, "/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/upsetplot_input_CM_Clusters_shareDays_ibsm40monos.csv")
+
+```
+
+
+```{r Upset plot from complex heatmap for shared genes among days within same clusters}
+psbDE_venn0<- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names = 1)
+
+set.seed(12345)
+##getting the data
+psbDE_venn2 <- psbDE_venn0 %>%
+  mutate(
+    groups = case_when(
+      set == "d8_only" ~ paste0(cluster_name, ".","d8"),
+      set == "d36_only" ~ paste0(cluster_name, ".","d36"),
+      set == "inter" ~ paste0(cluster_name, ".","d8&",cluster_name,".","d36"),
+    TRUE ~ NA_character_),
+    groups = factor(groups, levels=c("CM1.d8", "CM1.d36","CM1.d8&CM1.d36",
+                                   "CM2.d8", "CM2.d36", "CM2.d8&CM2.d36",
+                                   "CM3.d8", "CM3.d36",  "CM3.d8&CM3.d36",
+                                   "CM4.d8", "CM4.d36", "CM4.d8&CM4.d36")),
+    groups2 = case_when(
+      groups == "CM1.d8&CM1.d36" & day == "day8" ~ "CM1.d8",
+      groups == "CM1.d8&CM1.d36" & day == "day36" ~ "CM1.d36",
+      groups == "CM2.d8&CM2.d36" & day == "day8" ~ "CM2.d8",
+      groups == "CM2.d8&CM2.d36" & day == "day36" ~ "CM2.d36",
+      groups == "CM3.d8&CM3.d36" & day == "day8" ~ "CM3.d8",
+      groups == "CM3.d8&CM3.d36" & day == "day36" ~ "CM3.d36",
+      groups == "CM4.d8&CM4.d36" & day == "day8" ~ "CM4.d8",
+      groups == "CM4.d8&CM4.d36" & day == "day36" ~ "CM4.d36",
+      TRUE ~ groups))
+
+
+psbDE_venn2.ls = split(psbDE_venn2$gene, f=psbDE_venn2$groups2)
+
+##drawing the plot
+m = make_comb_mat(psbDE_venn2.ls, mode = "distinct")
+
+set_name(m)
+#"CM1.d36" "CM1.d8"  "CM2.d36" "CM2.d8"  "CM3.d36" "CM3.d8"  "CM4.d36" "CM4.d8" 
+##Selecting the intersections that I'm interested, for this plot, I want to compare
+## the clusters in pairs,
+comb_name(m)
+
+m3 <- m[, c("10100000","10001000","10000010", 
+            "01010000","01000100","01000001",
+            "00101000","00100010",
+            "00010100","00010001",
+            "00001010",
+            "00000101",
+            "10101010", "01010101",
+            "00101010","10001010", "10100010","10101000",
+            "00010101","01000101", "01010001","01010100","11111111",
+            "10000000", "01000000","00100000",
+            "00010000", "00001000","00000100",
+            "00000010", "00000001")]
+
+# m3 <- m[, c("00100000", "10000000", "00000010", "00001000", "00000001", "00000100", "01000000", "00010000",
+#             "10100000", "10001000", "10000010", "01010000", "01000100", "01000001", "00101000", "00100010", "00010100", "00010001", "00001010", "00000101", "10101010", "10101000", "10100010", "00101010", "01000101", "01010101", "10001010", "01010001", "01010100", "00010101", "11111111")]
+#order by size
+m3_ord <- m3[,order(comb_size(m3), decreasing = TRUE)]
+
+set_cols =
+c("CM1.d8"  = "#9e0142",
+  "CM1.d36" = "#9e0142",
+  "CM2.d8" = "#f4a582",
+  "CM2.d36" = "#f4a582",
+  "CM3.d8" = "#5e4fa2",
+  "CM3.d36" = "#5e4fa2",
+  "CM4.d8" = "#66c2a5",
+  "CM4.d36" = "#66c2a5")
+##Getting the up/down table
+psbDE_venn2$dir_sig <- factor(psbDE_venn2$dir_sig, levels = c("up","down"))
+gene_dir <- psbDE_venn2 %>%
+  distinct(gene, day, dir_sig) %>%
+  group_by(gene) %>%
+  summarise(
+    dir_sig = ifelse(any(dir_sig == "down"), "down", "up"),
+    .groups = "drop"
+  )
+
+cn3 <- comb_name(m3_ord)
+
+# FIX: extract_comb needs index, not name
+genes_by_comb3 <- lapply(cn3, function(nm) extract_comb(m3_ord, nm))
+names(genes_by_comb3) <- cn3
+
+stack_counts3 <- do.call(rbind, lapply(genes_by_comb3, function(g) {
+  idx <- match(g, gene_dir$gene)
+  d <- gene_dir$dir_sig[idx]
+  d <- d[!is.na(d)]
+  c(
+    up = sum(d == "up"),
+    down   = sum(d == "down")
+  )
+}))
+rownames(stack_counts3) <- cn3
+
+lab_du_3 <- paste0(stack_counts3[, "up"], "/", stack_counts3[, "down"])
+
+ha_stack3 <- HeatmapAnnotation (
+  "Intersection size (up/down)" = anno_barplot(
+    stack_counts3,
+    show_legend = TRUE,
+    show_annotation_name = TRUE,
+    beside = TRUE, 
+    border = FALSE,
+    gp = gpar(fill = c("up" = "#b41f2e","down" = "#2367ac")),
+    axis_param = list(gp = gpar(fontsize = 12)),
+    height = unit(6, "cm"),
+    width = unit(10,"cm"),
+    add_numbers = TRUE,
+    annotation_name_side = "right",
+    annotation_name_rot = 0
+  ),
+   "up/down" = anno_text(lab_du_3, rot = 90, gp = gpar(fontsize = 9))
+)
+#   
+pdf("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/training_monos_data4graphs/UpsetR_DEGs_sharedamong_CM_dist_freq_withupdownV3o.pdf", h=10, w =10)
+UpSet(
+  m3_ord,
+ comb_order = order(comb_size(m3_ord),decreasing = TRUE),
+  pt_size = unit(5, "pt"),
+  lwd = unit(2, "pt"),
+  top_annotation = ha_stack3, 
+  right_annotation = upset_right_annotation(
+    m3_ord,
+    add_numbers = TRUE,
+    gp = gpar(fill = set_cols),
+    annotation_name_side = "top",
+    axis_param = list(side = "top"),
+  row_names_gp = gpar(fontsize = 4), #changes font size of "set size" labels
+                     width = unit(182, units = "pt"),
+                     heatmap_height = unit(65, units = "pt")
+  )
+  )
+dev.off()
+
+##Getting a csv with the gene names per instersection
+genes_tbl_d3 <- bind_rows(lapply(names(genes_by_comb3), function(id) {
+  tibble(
+    intersection = id,
+    gene = genes_by_comb3[[id]]
+  )
+}))
+
+set_levels3 <- set_name(m3)
+##Function to decode information
+decode_intersection3 <- function(bitstring, sets) {
+  bits <- strsplit(bitstring, "")[[1]] == "1"
+  paste(sets[bits], collapse = "&")
+}
+
+genes_tbl_d3 <- genes_tbl_d3 %>%
+  mutate(
+    set_name = vapply(
+      intersection,
+      decode_intersection3,
+      character(1),
+      sets = set_levels3
+    )
+  )
+
+
+##Sanity check
+genes_tbl_d3_CM2.d36 <- genes_tbl_d3%>%filter(set_name=="CM2.d36")
+CM2.d236inters = psbDE_venn2[psbDE_venn2$gene %in% genes_tbl_d3_CM2.d36$gene,]
+table(CM2.d236inters$dir_sig)
+ #  up down 
+ # 120   78 
+
+write.csv(genes_tbl_d3, "/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/training_monos_data4graphs/UpsetR_DEGs_sharedamong_CM_dist_freq_withupdownV3.csv")
+
+
+```
+
+
+
+
+```{r Upset plot from complex heatmap for shared genes among days within same clusters ONLY UP}
+psbDE_venn0<- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names = 1)
+
+##getting the data
+psbDE_venn2 <- psbDE_venn0 %>%
+  mutate(
+    groups = case_when(
+      set == "d8_only" ~ paste0(cluster_name, ".","d8"),
+      set == "d36_only" ~ paste0(cluster_name, ".","d36"),
+      set == "inter" ~ paste0(cluster_name, ".","d8&",cluster_name,".","d36"),
+    TRUE ~ NA_character_),
+    groups = factor(groups, levels=c("CM1.d8", "CM1.d36","CM1.d8&CM1.d36",
+                                   "CM2.d8", "CM2.d36", "CM2.d8&CM2.d36",
+                                   "CM3.d8", "CM3.d36",  "CM3.d8&CM3.d36",
+                                   "CM4.d8", "CM4.d36", "CM4.d8&CM4.d36")),
+    groups2 = case_when(
+      groups == "CM1.d8&CM1.d36" & day == "day8" ~ "CM1.d8",
+      groups == "CM1.d8&CM1.d36" & day == "day36" ~ "CM1.d36",
+      groups == "CM2.d8&CM2.d36" & day == "day8" ~ "CM2.d8",
+      groups == "CM2.d8&CM2.d36" & day == "day36" ~ "CM2.d36",
+      groups == "CM3.d8&CM3.d36" & day == "day8" ~ "CM3.d8",
+      groups == "CM3.d8&CM3.d36" & day == "day36" ~ "CM3.d36",
+      groups == "CM4.d8&CM4.d36" & day == "day8" ~ "CM4.d8",
+      groups == "CM4.d8&CM4.d36" & day == "day36" ~ "CM4.d36",
+      TRUE ~ groups))
+
+psbDE_venn2_up <- psbDE_venn2%>%filter(dir_sig=="up")
+  
+psbDE_venn2_up.ls = split(psbDE_venn2_up$gene, f=psbDE_venn2_up$groups2)
+
+##drawing the plot
+m_up = make_comb_mat(psbDE_venn2_up.ls, mode = "distinct")
+
+set_name(m_up)
+#"CM1.d36" "CM1.d8"  "CM2.d36" "CM2.d8"  "CM3.d36" "CM3.d8"  "CM4.d36" "CM4.d8" 
+##Selecting the intersections that I'm interested, for this plot, I want to compare
+## the clusters in pairs,
+comb_name(m_up)
+m3_up <- m_up[, c("10000000", "01000000","00100000",
+            "00010000", "00001000","00000100",
+            "00000010", "00000001",
+            "10100000","10001000","10000010", 
+            "01010000","01000100","01000001",
+            "00101000","00100010",
+            "00010100","00010001",
+            "00001010",
+            "00000101",
+            "10101010", "01010101",
+            "00101010","10001010", "10100010","10101000",
+            "00010101","01000101", "01010001","01010100","11111111")]
+set_cols =
+c("CM1.d8"  = "#9e0142",
+  "CM1.d36" = "#9e0142",
+  "CM2.d8" = "#f4a582",
+  "CM2.d36" = "#f4a582",
+  "CM3.d8" = "#5e4fa2",
+  "CM3.d36" = "#5e4fa2",
+  "CM4.d8" = "#66c2a5",
+  "CM4.d36" = "#66c2a5")
+# ##Getting the up/down table
+# 
+# #gene_dir_up <- psbDE_venn2_up %>%
+#   distinct(gene, day, dir_sig) %>%
+#   group_by(gene) %>%
+#   summarise(
+#     dir_sig = ifelse(any(dir_sig == "down"), "down", "up"),
+#     .groups = "drop"
+#   )
+# 
+# #cn3_up <- comb_name(m3_up)
+# 
+# # FIX: extract_comb needs index, not name
+# #genes_by_comb3_up <- lapply(cn3_up, function(nm) extract_comb(m3_up, nm))
+# #names(genes_by_comb3_up) <- cn3_up
+# 
+# #stack_counts3_up <- do.call(rbind, lapply(genes_by_comb3_up, function(g) {
+#   idx <- match(g, gene_dir$gene)
+#   d <- gene_dir$dir_sig[idx]
+#   d <- d[!is.na(d)]
+#   c(
+#     down = sum(d == "down"),
+#     up   = sum(d == "up")
+#   )
+# #}))
+# #rownames(stack_counts3_up) <- cn3_up
+# 
+# #lab_du_3 <- paste0(stack_counts3[, "down"], "/", stack_counts3[, "up"])
+# 
+# #ha_stack3_up <- HeatmapAnnotation (
+#   "Intersection size (up/down)" = anno_barplot(
+#     stack_counts3,
+#     show_legend = TRUE,
+#     show_annotation_name = TRUE,
+#     beside = TRUE,
+#     border = FALSE,
+#     gp = gpar(fill = c(down = "#377eb8", up = "#4daf4a")),
+#     axis_param = list(gp = gpar(fontsize = 12)),
+#     height = unit(6, "cm"),
+#     width = unit(10,"cm"),
+#     add_numbers = TRUE,
+#     annotation_name_side = "right",
+#     annotation_name_rot = 0
+#   ),
+#    "down/up" = anno_text(lab_du_3, rot = 90, gp = gpar(fontsize = 9))
+# )
+
+pdf("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/training_monos_data4graphs/UpsetR_DEGs_sharedamong_CM_dist_freq_withuponlyV3up.pdf", h=7, w =7)
+UpSet(
+  m3_up,
+  pt_size = unit(5, "pt"),
+  lwd = unit(2, "pt"),
+  top_annotation = upset_top_annotation(m3_up,
+                                        show_annotation_name = FALSE,
+                                        add_numbers = TRUE,
+                                        annotation_name_rot = 90,
+                                        axis_param = list(gp = gpar(fontsize = 12)),
+                                        annotation_name_side = "right"),
+  right_annotation = upset_right_annotation(
+    m3_up,
+    add_numbers = TRUE,
+    gp = gpar(fontsize = 4, fill = set_cols),
+    annotation_name_side = "top",
+    axis_param = list(side = "top"),
+    row_names_gp = gpar(fontsize = 6), #changes font size of "set size" labels
+                     width = unit(3, "cm"),
+                     heatmap_height = unit(65, units = "pt"),
+    
+  )
+  )
+dev.off()
+
+```
+
+```{r Upset plot from complex heatmap for shared genes among days within same clusters ONLY UP}
+psbDE_venn0<- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names = 1)
+
+##getting the data
+psbDE_venn2 <- psbDE_venn0 %>%
+  mutate(
+    groups = case_when(
+      set == "d8_only" ~ paste0(cluster_name, ".","d8"),
+      set == "d36_only" ~ paste0(cluster_name, ".","d36"),
+      set == "inter" ~ paste0(cluster_name, ".","d8&",cluster_name,".","d36"),
+    TRUE ~ NA_character_),
+    groups = factor(groups, levels=c("CM1.d8", "CM1.d36","CM1.d8&CM1.d36",
+                                   "CM2.d8", "CM2.d36", "CM2.d8&CM2.d36",
+                                   "CM3.d8", "CM3.d36",  "CM3.d8&CM3.d36",
+                                   "CM4.d8", "CM4.d36", "CM4.d8&CM4.d36")),
+    groups2 = case_when(
+      groups == "CM1.d8&CM1.d36" & day == "day8" ~ "CM1.d8",
+      groups == "CM1.d8&CM1.d36" & day == "day36" ~ "CM1.d36",
+      groups == "CM2.d8&CM2.d36" & day == "day8" ~ "CM2.d8",
+      groups == "CM2.d8&CM2.d36" & day == "day36" ~ "CM2.d36",
+      groups == "CM3.d8&CM3.d36" & day == "day8" ~ "CM3.d8",
+      groups == "CM3.d8&CM3.d36" & day == "day36" ~ "CM3.d36",
+      groups == "CM4.d8&CM4.d36" & day == "day8" ~ "CM4.d8",
+      groups == "CM4.d8&CM4.d36" & day == "day36" ~ "CM4.d36",
+      TRUE ~ groups))
+
+psbDE_venn2_down <- psbDE_venn2%>%filter(dir_sig=="down")
+  
+psbDE_venn2_down.ls = split(psbDE_venn2_down$gene, f=psbDE_venn2_down$groups2)
+
+##drawing the plot
+m_down = make_comb_mat(psbDE_venn2_down.ls, mode = "distinct")
+
+set_name(m_down)
+#"CM1.d36" "CM1.d8"  "CM2.d36" "CM2.d8"  "CM3.d36" "CM3.d8"  "CM4.d36" "CM4.d8" 
+##Selecting the intersections that I'm interested, for this plot, I want to compare
+## the clusters in pairs,
+comb_name(m_down)
+m3_down <- m_down[, c("10000000", "01000000","00100000",
+            "00010000", "00001000","00000100",
+            "00000010", "00000001",
+            "10100000","10001000","10000010", 
+            "01010000","01000100","01000001",
+            "00101000","00100010",
+            "00010100","00010001",
+            "00001010",
+            "00000101",
+            "10101010", "01010101",
+            "00101010","10001010", "10100010","10101000",
+            "00010101","01000101", "01010001","01010100","11111111")]
+set_cols =
+c("CM1.d8"  = "#9e0142",
+  "CM1.d36" = "#9e0142",
+  "CM2.d8" = "#f4a582",
+  "CM2.d36" = "#f4a582",
+  "CM3.d8" = "#5e4fa2",
+  "CM3.d36" = "#5e4fa2",
+  "CM4.d8" = "#66c2a5",
+  "CM4.d36" = "#66c2a5")
+
+pdf("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/training_monos_data4graphs/UpsetR_DEGs_sharedamong_CM_dist_freq_withuponlyV3down.pdf", h=7, w =7)
+UpSet(
+  m3_down,
+  pt_size = unit(5, "pt"),
+  lwd = unit(2, "pt"),
+  top_annotation = upset_top_annotation(m3_down,
+                                        show_annotation_name = FALSE,
+                                        add_numbers = TRUE,
+                                        annotation_name_rot = 90,
+                                        axis_param = list(gp = gpar(fontsize = 12)),
+                                        annotation_name_side = "right"),
+  right_annotation = upset_right_annotation(
+    m3_down,
+    add_numbers = TRUE,
+    gp = gpar(fontsize = 4, fill = set_cols),
+    annotation_name_side = "top",
+    axis_param = list(side = "top"),
+    row_names_gp = gpar(fontsize = 6), #changes font size of "set size" labels
+                     width = unit(3, "cm"),
+                     heatmap_height = unit(65, units = "pt"),
+    
+  )
+  )
+dev.off()
+
+```
+
+```{r sanity check_ }
+####sanity check venn vs upset####
+##day36
+# 1. Get unique gene lists for each group
+day36Genes_CM1   <- unique(sigDGEs %>% filter(cluster_day =="CM1_day36") %>% pull(gene))
+
+day36Genes_CM2   <- unique(sigDGEs %>% filter(cluster_day =="CM2_day36") %>% pull(gene))
+
+# 2. Compute the disjoint sets (Venn regions)
+
+# Double intersection
+CM1_CM2_d36 <- Reduce(intersect, list(day36Genes_CM2, day36Genes_CM1))
+
+# Unique only
+CM1d36_only  <- setdiff(day36Genes_CM1, CM1_CM2_d36)
+CM2d36_only    <- setdiff(day36Genes_CM2, CM1_CM2_d36)
+
+venn_db_CM1 <- as.data.frame(bind_rows(
+  tibble(set = "CM1d36_only",  gene = CM1d36_only),
+  tibble(set = "CM2d36_only", gene = CM2d36_only),
+  tibble(set = "inter",    gene = CM1_CM2_d36)
+)) %>% mutate(day="day36")
+
+# 3. Construct named region vector for eulerr
+fit1_CM1 <- euler(c(
+  "CM1d36"  = length(day36Genes_CM1),
+  "CM1d36&CM2d36"= length(CM1_CM2_d36),
+  "CM2d36" = length(day36Genes_CM2)
+  ))
+
+# 4. Plot the Venn diagram with correct disjoint counts
+plot(
+  fit1_CM1,
+  main="CM1",
+  quantities = TRUE,
+  fills = list(fill = c("#fdae61", "#0072B2"), alpha = 0.5),
+  edges = list(lwd = 1),
+  labels = list(font = 2)
+) 
+
+####day8 ####
+# 1. Get unique gene lists for each group
+day8Genes_CM1   <- unique(sigDGEs %>% filter(cluster_day =="CM1_day8") %>% pull(gene))
+
+day8Genes_CM2   <- unique(sigDGEs %>% filter(cluster_day =="CM2_day8") %>% pull(gene))
+
+# 2. Compute the disjoint sets (Venn regions)
+
+# Double intersection
+CM1_CM2_d8 <- Reduce(intersect, list(day8Genes_CM2, day8Genes_CM1))
+
+# Unique only
+CM1d8_only  <- setdiff(day8Genes_CM1, CM1_CM2_d8)
+CM2d8_only    <- setdiff(day8Genes_CM2, CM1_CM2_d8)
+
+venn_db_CM1 <- as.data.frame(bind_rows(
+  tibble(set = "CM1d8_only",  gene = CM1d8_only),
+  tibble(set = "CM2d8_only", gene = CM2d8_only),
+  tibble(set = "inter",    gene = CM1_CM2_d8)
+)) %>% mutate(day="day8")
+
+# 3. Construct named region vector for eulerr
+fit1_CM1 <- euler(c(
+  "CM1d8"  = length(day8Genes_CM1),
+  "CM1d8&CM2d8"= length(CM1_CM2_d8),
+  "CM2d8" = length(day8Genes_CM2)
+  ))
+
+# 4. Plot the Venn diagram with correct disjoint counts
+plot(
+  fit1_CM1,
+  main="CM1",
+  quantities = TRUE,
+  fills = list(fill = c("#fdae61", "#0072B2"), alpha = 0.5),
+  edges = list(lwd = 1),
+  labels = list(font = 2)
+) 
+
+
+```
+
+```{r Figure 1d updated barplot deg all clusters per day}
+
+#### Figure 1d updated barplot deg all clusters per day ####
+#Getting the gene list and selecting the top 10 per cluster/day
+sigDGEs <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/psbulk_sigGens__all_DayClusters.csv", row.names=1)
+
+
+# Creating direction variable
+sigDGEs$dir_sig[sigDGEs$logFC>0] <-"up"
+sigDGEs$dir_sig[sigDGEs$logFC<0] <-"down"
+#Adding new name
+sigDGEs$cluster_name = factor(sigDGEs$cluster_name,
+                                  labels = c("cMonocyte-IL"="CM1",                                                          "cMonocyte-S100A8"="CM2",                                                       "cMonocyte-COQ7"="CM3",                                                        "cMonocyte-ISG15"="CM4",
+                                             "DCs1" ="DCs1",
+                                             "DCs2" ="DCs2",
+                                             "intMonocyte"= "intMonocyte",
+                                             "ncMonocyte-CD16"= "ncMonocyte",
+                                             "pDCs"="pDCs"))
+
+sigDGEs<- sigDGEs[sigDGEs$day %in% c("day36","day8"),]
+table(sigDGEs$cluster_name, sigDGEs$day )
+
+sigDGEs$cluster_day <- paste0(sigDGEs$cluster_name, "_", sigDGEs$day)
+
+table(sigDGEs$cluster_day, sigDGEs$dir_sig)
+
+
+Fig1DMeta_Freq <- as.data.frame(table(sigDGEs$cluster_day, sigDGEs$dir_sig, sigDGEs$day))
+
+#Renaming columns
+colnames(Fig1DMeta_Freq)[1] ="cluster_day"
+colnames(Fig1DMeta_Freq)[2] ="FC_direction"
+colnames(Fig1DMeta_Freq)[3] ="Day_comparison"
+colnames(Fig1DMeta_Freq)[4] ="Count"
+
+Fig1DMeta_Freq <- separate(Fig1DMeta_Freq, "cluster_day", into=c("Celltype","Day"), sep="_", remove = FALSE )%>%
+  mutate(rem=
+           case_when(Day==Day_comparison  ~ "no",
+                     Day!=Day_comparison & Count==0 ~ "yes"),
+         Day_comparison=
+           case_when(Day == "day8" ~ "Day0vsDay8",
+                     Day == "day36" ~ "Day0vsDay36",))%>%
+  filter(rem=="no")
+##Adding factors
+
+##Creating celltype factors
+celltype_fact2<- c("CM1", "CM2","CM3","CM4","intMonocyte", "ncMonocyte","DCs1","DCs2","pDCs")
+##Creating day factors
+day_fact<- c("day8", "day36")
+##Creating day comparsionfactors
+daycom_fact<- c("Day0vsDay8", "Day0vsDay36")
+dir_fact <- c("up", "down")
+##Creating day factors
+Fig1DMeta_Freq$Celltype <- factor(Fig1DMeta_Freq$Celltype, levels = celltype_fact2)
+Fig1DMeta_Freq$Day <- factor(Fig1DMeta_Freq$Day, levels = day_fact)
+Fig1DMeta_Freq$Day_comparison <- factor(Fig1DMeta_Freq$Day_comparison, levels = daycom_fact)
+Fig1DMeta_Freq$FC_direction <- factor(Fig1DMeta_Freq$FC_direction, levels = dir_fact)
+
+# 
+#Figure1D-Barplot with cell numbers per donor
+pop_clusD <- ggplot(data = Fig1DMeta_Freq,
+                    aes(x = Celltype, y = Count, fill = FC_direction)) +
+  geom_bar(position="stack", stat = "identity") +
+  scale_fill_manual(values = c(down = "#2166AC", up = "#B2182B")) +
+  scale_y_continuous(limits = c(0, 400)) +
+  facet_grid(~ Day_comparison) +
+  theme(
+    panel.background = element_rect(fill = 'white', colour = 'black'),
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1), 
+    panel.grid.major.y = element_line(colour = "grey", linewidth = 0.5),
+    panel.grid.minor.y = element_blank(),
+    strip.text = element_text(size = 12, color = "black")
+  ) 
+pdf("/working_groups/boylelab/shared/ZulyPava/Training_paper_scRNAseq_R4.4/output_for_paper/Fig1d_Barplot_DEGs_allclusters_180226.pdf", h=5, w=7)
+pop_clusD
+dev.off()
+```
+## 2026 | New Figures
+
+### Upset plot with upregulated genes
+```{r new Upset version michelle 270826 zp updated first up}
+# ------------------------------------------------------------
+# 1. Read input data
+# ------------------------------------------------------------
+
+psbDE_venn0 <- read.csv(
+  "/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv",
+  row.names = 1
+)
+
+
+# ------------------------------------------------------------
+# 2. Create grouping variables
+# ------------------------------------------------------------
+
+psbDE_venn2 <- psbDE_venn0 %>%
+  mutate(
+    groups = case_when(
+      set == "d8_only"  ~ paste0(cluster_name, ".d8"),
+      set == "d36_only" ~ paste0(cluster_name, ".d36"),
+      set == "inter"    ~ paste0(
+        cluster_name, ".d8&",
+        cluster_name, ".d36"
+      ),
+      TRUE ~ NA_character_
+    ),
+
+    groups = factor(
+      groups,
+      levels = c(
+        "CM1.d8", "CM1.d36", "CM1.d8&CM1.d36",
+        "CM2.d8", "CM2.d36", "CM2.d8&CM2.d36",
+        "CM3.d8", "CM3.d36", "CM3.d8&CM3.d36",
+        "CM4.d8", "CM4.d36", "CM4.d8&CM4.d36"
+      )
+    ),
+
+    # For genes shared between d8 and d36 within a cluster,
+    # assign the appropriate day-specific group.
+    groups2 = case_when(
+      groups == "CM1.d8&CM1.d36" & day == "day8"  ~ "CM1.d8",
+      groups == "CM1.d8&CM1.d36" & day == "day36" ~ "CM1.d36",
+
+      groups == "CM2.d8&CM2.d36" & day == "day8"  ~ "CM2.d8",
+      groups == "CM2.d8&CM2.d36" & day == "day36" ~ "CM2.d36",
+
+      groups == "CM3.d8&CM3.d36" & day == "day8"  ~ "CM3.d8",
+      groups == "CM3.d8&CM3.d36" & day == "day36" ~ "CM3.d36",
+
+      groups == "CM4.d8&CM4.d36" & day == "day8"  ~ "CM4.d8",
+      groups == "CM4.d8&CM4.d36" & day == "day36" ~ "CM4.d36",
+
+      TRUE ~ as.character(groups)
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 3. Keep only UP-regulated genes
+# ------------------------------------------------------------
+
+psbDE_venn2_up <- psbDE_venn2 %>%
+  filter(dir_sig == "up")
+
+
+# ------------------------------------------------------------
+# 4. Convert gene lists into named list for UpSet
+# ------------------------------------------------------------
+
+psbDE_venn2_up.ls <- split(
+  psbDE_venn2_up$gene,
+  f = psbDE_venn2_up$groups2
+)
+
+
+# ------------------------------------------------------------
+# 5. Create combination matrix
+# ------------------------------------------------------------
+
+m_up <- make_comb_mat(
+  psbDE_venn2_up.ls,
+  mode = "distinct"
+)
+# ------------------------------------------------------------
+# 6. Remove combinations containing fewer than 5 genes
+# ------------------------------------------------------------
+
+m3_up <- m_up[,  comb_size(m_up) >= 5]
+
+# ------------------------------------------------------------
+# 9. Inspect combinations that remain
+# ------------------------------------------------------------
+
+comb_df <- data.frame(
+  combination = comb_name(m3_up),
+  n_genes     = comb_size(m3_up)
+)
+
+# Sort table from largest to smallest for inspection
+comb_df <- comb_df %>%
+  arrange(desc(n_genes))
+
+print(comb_df)
+
+
+# ------------------------------------------------------------
+# 10. Automatically order UpSet columns by intersection size
+#     HIGH -> LOW
+# ------------------------------------------------------------
+
+# Get combination sizes
+comb_sizes <- comb_size(m3_up)
+
+# Get integer positions sorted by size (largest to smallest)
+ordered_idx <- order(comb_sizes, decreasing = TRUE)
+
+# ------------------------------------------------------------
+# 11. Define colours for each cell population
+# ------------------------------------------------------------
+
+set_cols <- c(
+  "CM1.d8"  = "#9e0142",
+  "CM1.d36" = "#9e0142",
+
+  "CM2.d8"  = "#f4a582",
+  "CM2.d36" = "#f4a582",
+
+  "CM3.d8"  = "#5e4fa2",
+  "CM3.d36" = "#5e4fa2",
+
+  "CM4.d8"  = "#66c2a5",
+  "CM4.d36" = "#66c2a5"
+)
+
+
+# ------------------------------------------------------------
+# 12. Draw and save UpSet plot
+# ------------------------------------------------------------
+
+pdf(
+  "/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/training_monos_data4graphs/UpsetR_DEGs_sharedamong_CM_dist_freq_withuponlyV3up_v3.pdf",
+  height = 7,
+  width  = 7
+)
+
+# Pass integer indices directly to UpSet
+UpSet(m3_up,
+      comb_order = ordered_idx,    # ← integer positions, not names
+      pt_size = unit(8, "pt"),
+      lwd     = unit(2, "pt"),
+
+      top_annotation = upset_top_annotation(
+        m3_up,
+        show_annotation_name = FALSE,
+        add_numbers          = TRUE,
+        annotation_name_rot  = 90,
+        axis_param           = list(gp = gpar(fontsize = 12)),
+        annotation_name_side = "left"
+      ),
+
+      right_annotation = upset_right_annotation(
+        m3_up,
+        add_numbers = TRUE,
+        gp = gpar(fontsize = 4, fill = set_cols),
+        annotation_name_side = "top",
+        axis_param = list(side = "top"),
+        row_names_gp = gpar(fontsize = 6),
+        width = unit(3, "cm"),
+        heatmap_height = unit(55, units = "pt")
+      )
+)
+
+dev.off()
+```
+### Upset plot with downregulated genes
+```{r new Upset version michelle 270826 zp updated Secon Down}
+
+# ------------------------------------------------------------
+# 3. Keep only DOWN-regulated genes
+# ------------------------------------------------------------
+
+psbDE_venn2_down <- psbDE_venn2 %>%
+  filter(dir_sig == "down")
+
+
+# ------------------------------------------------------------
+# 4. Convert gene lists into named list for UpSet
+# ------------------------------------------------------------
+
+psbDE_venn2_down.ls <- split(
+  psbDE_venn2_down$gene,
+  f = psbDE_venn2_down$groups2
+)
+
+
+# ------------------------------------------------------------
+# 5. Create combination matrix
+# ------------------------------------------------------------
+
+m_down <- make_comb_mat(
+  psbDE_venn2_down.ls,
+  mode = "distinct"
+)
+# ------------------------------------------------------------
+# 6. Remove combinations containing fewer than 5 genes
+# ------------------------------------------------------------
+
+m3_down <- m_down[,  comb_size(m_down) >= 5]
+
+# ------------------------------------------------------------
+# 9. Inspect combinations that remain
+# ------------------------------------------------------------
+
+comb_df_down <- data.frame(
+  combination = comb_name(m3_down),
+  n_genes     = comb_size(m3_down)
+)
+
+# Sort table from largest to smallest for inspection
+comb_df_down <- comb_df_down %>%
+  arrange(desc(n_genes))
+
+print(comb_df_down)
+
+
+# ------------------------------------------------------------
+# 10. Automatically order UpSet columns by intersection size
+#     HIGH -> LOW
+# ------------------------------------------------------------
+
+# Get combination sizes
+comb_sizes_down <- comb_size(m3_down)
+
+# Get integer positions sorted by size (largest to smallest)
+ordered_idx_down <- order(comb_sizes_down, decreasing = TRUE)
+
+# ------------------------------------------------------------
+# 11. Define colours for each cell population
+# ------------------------------------------------------------
+
+set_cols <- c(
+  "CM1.d8"  = "#9e0142",
+  "CM1.d36" = "#9e0142",
+
+  "CM2.d8"  = "#f4a582",
+  "CM2.d36" = "#f4a582",
+
+  "CM3.d8"  = "#5e4fa2",
+  "CM3.d36" = "#5e4fa2",
+
+  "CM4.d8"  = "#66c2a5",
+  "CM4.d36" = "#66c2a5"
+)
+
+
+# ------------------------------------------------------------
+# 12. Draw and save UpSet plot
+# ------------------------------------------------------------
+
+pdf(
+  "/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/training_monos_data4graphs/UpsetR_DEGs_sharedamong_CM_dist_freq_withDownonlyV3up_v3.pdf",
+  height = 7,
+  width  = 7
+)
+
+# Pass integer indices directly to UpSet
+UpSet(m3_down,
+      comb_order = ordered_idx_down,    # ← integer positions, not names
+      pt_size = unit(8, "pt"),
+      lwd     = unit(2, "pt"),
+
+      top_annotation = upset_top_annotation(
+        m3_down,
+        show_annotation_name = FALSE,
+        add_numbers          = TRUE,
+        annotation_name_rot  = 90,
+        axis_param           = list(gp = gpar(fontsize = 12)),
+        annotation_name_side = "left"
+      ),
+
+      right_annotation = upset_right_annotation(
+        m3_down,
+        add_numbers = TRUE,
+        gp = gpar(fontsize = 4, fill = set_cols),
+        annotation_name_side = "top",
+        axis_param = list(side = "top"),
+        row_names_gp = gpar(fontsize = 6),
+        width = unit(3, "cm"),
+        heatmap_height = unit(55, units = "pt")
+      )
+)
+
+dev.off()
+```
+
+## Heatmap showing Average expression of sig uniquely & shared upregulated genes per day per celltype, for at least 3/4 subtypes. 
+
+#### Methods
+
+Differentially expressed genes (DEGs) were identified using a pseudobulk approach across four classical monocyte subpopulations (CM1–CM4) at day 8 and day 36 post-infection. Only upregulated genes (log fold-change > 0) were retained for downstream classification.
+
+For each subpopulation, DEGs were first classified into three mutually exclusive temporal categories using set operations: day 8-specific (genes significant at day 8 only), day 36-specific (genes significant at day 36 only), and shared (genes significant at both time points). To identify broadly regulated temporal patterns across subpopulations, each gene was then assigned a dominant temporal category based on a ratio of the number of subpopulations supporting that classification over the total number of subpopulations (n = 4). Genes were reclassified into a consensus temporal pattern — day 8-dominant, day 36-dominant, or shared — when a single temporal category was supported by 50% or more of subpopulations. Genes where no single category met this threshold, or where two categories tied at the maximum ratio, were flagged as ambiguous. This ratio-based reclassification replaces a fixed cluster-count threshold and provides a more proportional measure of cross-subpopulation consistency.
+
+Average normalised expression values were z-score scaled and visualised as a heatmap, with genes annotated by their consensus temporal pattern to highlight coordinated transcriptional programmes across monocyte subpopulations.
+
+#### Interpretation
+
+The temporal classification of upregulated DEGs revealed three distinct expression patterns across CM1–CM4 monocyte subpopulations. Day 8-specific genes likely reflect an acute transcriptional response to peak parasitaemia, potentially encompassing innate immune activation and inflammatory signalling pathways. In contrast, day 36-specific genes suggest a late or sustained transcriptional programme, possibly associated with immune adaptation, resolution of inflammation, or functional reprogramming following parasite clearance. Genes shared across both time points represent a consistently maintained transcriptional state, potentially indicative of stable monocyte reprogramming persisting beyond acute infection — a pattern consistent with trained immunity.
+
+The requirement that genes be upregulated in at least three of four subpopulations ensured that only broadly coordinated responses were captured, pointing to shared regulatory mechanisms across monocyte subsets rather than subtype-specific effects. Together, these findings suggest that malaria infection drives both a rapid and a sustained pan-monocyte transcriptional response, with the persistence of shared genes at day 36 raising the possibility of long-term epigenetic remodelling.
+
+```{r heatmap of uniquely upregulated genes per day LATEST}
+#Reading input
+Average.df <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/monosIBSM_Averagemat_LOGNORMALISED_daycluster_300925.csv", row.names = 1)
+
+#Selecting the clusters name
+cMonocytes <- c("CM1", "CM2", "CM3", "CM4")
+rownames(Average.df) <- Average.df$day_cluster
+
+str(Average.df)
+Average.df$day <- factor(Average.df$day, levels = c("day0", "day8", "day36"))
+Average.df$cluster <- factor(Average.df$cluster, levels = cMonocytes)
+
+#### Subsetting cluster (for example one heatmap per cluster)
+Average.sub <- Average.df[Average.df$cluster %in% c("CM1", "CM2", "CM3", "CM4"), ]
+#Average.Tfh1CM <- Average.Tfh1CM[Average.Tfh1CM$day %in% c("day0", "day16"), ]
+rownames(Average.sub) <- Average.sub$day_cluster
+#### okay now to reorder EVERYTHING... 
+
+my_order <- c("day0-CM1", "day0-CM1", "day0-CM1", "day0-CM1",
+              "day8-CM1", "day8-CM1", "day8-CM1", "day8-CM1",
+              "day36-CM1", "day36-CM1", "day36-CM1", "day36-CM1",
+              "day0-CM2", "day0-CM2", "day0-CM2", "day0-CM2",
+              "day8-CM2", "day8-CM2", "day8-CM2", "day8-CM2",
+              "day36-CM2", "day36-CM2", "day36-CM2", "day36-CM2",
+              "day0-CM3", "day0-CM3", "day0-CM3", "day0-CM3",
+              "day8-CM3", "day8-CM3", "day8-CM3", "day8-CM3",
+              "day36-CM3", "day36-CM3", "day36-CM3", "day36-CM3",
+              "day0-CM4", "day0-CM4", "day0-CM4", "day0-CM4",
+              "day8-CM4", "day8-CM4", "day8-CM4", "day8-CM4",
+              "day36-CM4", "day36-CM4", "day36-CM4", "day36-CM4")
+
+Average.sub <- Average.sub[match(my_order, rownames(Average.sub)), ]
+
+Average.sub <- Average.sub %>%
+  mutate(day = factor(day, levels = c("day0","day8","day36")),
+         cluster = factor(cluster, levels = cMonocytes )) %>%
+  arrange(cluster, day)
+
+#### Getting the gene list and selecting the top 10 per cluster/day ####
+
+sigDGEs <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names=1)
+
+#Adding new name
+sigDGEs$cluster_name = factor(sigDGEs$cluster_name, levels = cMonocytes)
+#filter the comparison of interest and the direction of the genes
+merged_genes1 <- sigDGEs %>%
+  filter(
+    dir_sig == "up",
+    day %in% c("day36", "day8"),
+    set2 %in% c("d8_only", "d36_only", "d8&d36")
+  ) %>%
+  group_by(set2) %>%
+  arrange(p_adj, .by_group = TRUE) %>%
+  slice_head(n = 20) %>%
+  ungroup()
+
+merged_genes1$gene = gsub("-", ".", merged_genes1$gene)
+merged_genes2 <- unique(merged_genes1$gene)
+
+#### subsetting our selected genes
+dfsub_d816<- as.matrix(Average.sub[, colnames(Average.sub) %in% merged_genes2])
+
+dfsub_d816 <- as.matrix(dfsub_d816)
+dfsub_d816 = scale(dfsub_d816)
+
+col = list(Cluster = c("CM1" = "#9e0142",
+                       "CM2" = "#f4a582",
+                       "CM3" = "#5e4fa2",
+                       "CM4" = "#66c2a5"),
+            Day = c("day0" = "#bababa",
+                   "day8" = "#fdae61",
+                   "day36" = "blue"))
+
+# ##We got high medium and low expression, we want 3 colors
+# rng <- max(abs(dfsub_d816), na.rm = TRUE)  # or use abs(expr_z) if you built it
+# rng <- if (is.finite(rng) && rng > 0) rng else 1  # fallback
+
+# 3-color diverging palette: negative / zero / positive
+col_fun <- colorRamp2(
+  c(-2, 0, 4),
+  c("#2166AC", "#FFFFFF", "#B2182B")   # blue - white - red (swap colors if you want)
+)
+
+ha <- HeatmapAnnotation(Cluster=Average.sub$cluster,
+                        Day=Average.sub$day,
+                        col = col)
+
+col_split <- factor(Average.sub$cluster, levels = c("CM1","CM2","CM3","CM4"))
+
+row_split0 <- merged_genes1 %>% 
+  filter(gene %in% merged_genes2) %>% # keep only genes in merged_genes2
+  select(gene, set2) %>% 
+  #distinct(gene, .keep_all = TRUE) %>%# one row per gene
+  mutate(set2 = factor(set2, levels = c("d8_only", "d36_only","d8&d36")))
+
+# Align 'set' to the heatmap row order (genes)
+gene_order <- rownames(t(dfsub_d816))                       # rows of the heatmap
+set_map    <- setNames(as.character(row_split0$set2), row_split0$gene)
+row_set    <- factor(set_map[gene_order], levels = c("d8_only", "d36_only", "d8&d36"))
+
+# Row annotation for 'set'
+row_ann <- rowAnnotation(
+  Set = row_set,
+  col = list(Set = c("d8_only" = "#fdae61", "d36_only" = "#0072B2", "d8&d36" ="#008837")),
+  annotation_name_side = "top"
+)
+
+pdf(here("output/heatmap_D8andD36geneset_avexpdaycluster_nrev_v4_020926.pdf"), width = 8, height =10)
+
+Heatmap(
+  t(dfsub_d816),
+  name = "AvExpr", col = col_fun,
+  top_annotation = ha,
+  left_annotation = row_ann,                 # <<< add row annotation
+  cluster_rows = FALSE,                       # keep clustering order
+  show_row_dend = FALSE,                     # <<< hide row dendrogram graphic
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,                  # (explicit; no column dendrogram)
+  column_split = col_split,
+  column_gap = unit(4, "mm"),
+  row_split = row_set,       # <<< split rows by set (d8_only / d36_only)
+  row_gap = unit(1, "mm"),
+  column_title = "Genes",
+  row_title = "Day-unique genes",
+  row_names_gp = gpar(fontsize = 6),
+  column_names_gp = gpar(fontsize = 4)
+)
+dev.off()
+```
+```{r heatmap of uniquely downregulated genes per day LATEST}
+#Reading input
+Average.df <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/monosIBSM_Averagemat_LOGNORMALISED_daycluster_300925.csv", row.names = 1)
+
+#Selecting the clusters name
+cMonocytes <- c("CM1", "CM2", "CM3", "CM4")
+rownames(Average.df) <- Average.df$day_cluster
+
+str(Average.df)
+Average.df$day <- factor(Average.df$day, levels = c("day0", "day8", "day36"))
+Average.df$cluster <- factor(Average.df$cluster, levels = cMonocytes)
+
+#### Subsetting cluster (for example one heatmap per cluster)
+Average.sub <- Average.df[Average.df$cluster %in% c("CM1", "CM2", "CM3", "CM4"), ]
+#Average.Tfh1CM <- Average.Tfh1CM[Average.Tfh1CM$day %in% c("day0", "day16"), ]
+rownames(Average.sub) <- Average.sub$day_cluster
+#### okay now to reorder EVERYTHING... 
+
+my_order <- c("day0-CM1", "day0-CM1", "day0-CM1", "day0-CM1",
+              "day8-CM1", "day8-CM1", "day8-CM1", "day8-CM1",
+              "day36-CM1", "day36-CM1", "day36-CM1", "day36-CM1",
+              "day0-CM2", "day0-CM2", "day0-CM2", "day0-CM2",
+              "day8-CM2", "day8-CM2", "day8-CM2", "day8-CM2",
+              "day36-CM2", "day36-CM2", "day36-CM2", "day36-CM2",
+              "day0-CM3", "day0-CM3", "day0-CM3", "day0-CM3",
+              "day8-CM3", "day8-CM3", "day8-CM3", "day8-CM3",
+              "day36-CM3", "day36-CM3", "day36-CM3", "day36-CM3",
+              "day0-CM4", "day0-CM4", "day0-CM4", "day0-CM4",
+              "day8-CM4", "day8-CM4", "day8-CM4", "day8-CM4",
+              "day36-CM4", "day36-CM4", "day36-CM4", "day36-CM4")
+
+Average.sub <- Average.sub[match(my_order, rownames(Average.sub)), ]
+
+Average.sub <- Average.sub %>%
+  mutate(day = factor(day, levels = c("day0","day8","day36")),
+         cluster = factor(cluster, levels = cMonocytes )) %>%
+  arrange(cluster, day)
+
+#### Getting the gene list and selecting the top 10 per cluster/day ####
+
+sigDGEs <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names=1)
+
+#Adding new name
+sigDGEs$cluster_name = factor(sigDGEs$cluster_name, levels = cMonocytes)
+#filter the comparison of interest and the direction of the genes
+merged_genes1 <- sigDGEs %>%
+  filter(
+    dir_sig == "down",
+    day %in% c("day36", "day8"),
+    set2 %in% c("d8_only", "d36_only", "d8&d36")
+  ) %>%
+  group_by(set2) %>%
+  arrange(p_adj, .by_group = TRUE) %>%
+  slice_head(n = 20) %>%
+  ungroup()
+
+merged_genes1$gene = gsub("-", ".", merged_genes1$gene)
+merged_genes2 <- unique(merged_genes1$gene)
+
+#### subsetting our selected genes
+dfsub_d816<- as.matrix(Average.sub[, colnames(Average.sub) %in% merged_genes2])
+
+dfsub_d816 <- as.matrix(dfsub_d816)
+dfsub_d816 = scale(dfsub_d816)
+
+col = list(Cluster = c("CM1" = "#9e0142",
+                       "CM2" = "#f4a582",
+                       "CM3" = "#5e4fa2",
+                       "CM4" = "#66c2a5"),
+            Day = c("day0" = "#bababa",
+                   "day8" = "#fdae61",
+                   "day36" = "blue"))
+
+# ##We got high medium and low expression, we want 3 colors
+# rng <- max(abs(dfsub_d816), na.rm = TRUE)  # or use abs(expr_z) if you built it
+# rng <- if (is.finite(rng) && rng > 0) rng else 1  # fallback
+
+# 3-color diverging palette: negative / zero / positive
+col_fun <- colorRamp2(
+  c(-2, 0, 4),
+  c("#2166AC", "#FFFFFF", "#B2182B")   # blue - white - red (swap colors if you want)
+)
+
+ha <- HeatmapAnnotation(Cluster=Average.sub$cluster,
+                        Day=Average.sub$day,
+                        col = col)
+
+col_split <- factor(Average.sub$cluster, levels = c("CM1","CM2","CM3","CM4"))
+
+row_split0 <- merged_genes1 %>% 
+  filter(gene %in% merged_genes2) %>% # keep only genes in merged_genes2
+  select(gene, set2) %>% 
+  #distinct(gene, .keep_all = TRUE) %>%# one row per gene
+  mutate(set2 = factor(set2, levels = c("d8_only", "d36_only","d8&d36")))
+
+# Align 'set' to the heatmap row order (genes)
+gene_order <- rownames(t(dfsub_d816))                       # rows of the heatmap
+set_map    <- setNames(as.character(row_split0$set2), row_split0$gene)
+row_set    <- factor(set_map[gene_order], levels = c("d8_only", "d36_only", "d8&d36"))
+
+# Row annotation for 'set'
+row_ann <- rowAnnotation(
+  Set = row_set,
+  col = list(Set = c("d8_only" = "#fdae61", "d36_only" = "#0072B2", "d8&d36" ="#008837")),
+  annotation_name_side = "top"
+)
+
+pdf(here("output/heatmap_D8andD36geneset_avexpdaycluster_nrevDOWN_v4_020926.pdf"), width = 8, height =10)
+
+Heatmap(
+  t(dfsub_d816),
+  name = "AvExpr", col = col_fun,
+  top_annotation = ha,
+  left_annotation = row_ann,                 # <<< add row annotation
+  cluster_rows = FALSE,                       # keep clustering order
+  show_row_dend = FALSE,                     # <<< hide row dendrogram graphic
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,                  # (explicit; no column dendrogram)
+  column_split = col_split,
+  column_gap = unit(4, "mm"),
+  row_split = row_set,       # <<< split rows by set (d8_only / d36_only)
+  row_gap = unit(1, "mm"),
+  column_title = "Genes",
+  row_title = "Day-unique genes",
+  row_names_gp = gpar(fontsize = 6),
+  column_names_gp = gpar(fontsize = 4)
+)
+dev.off()
+```
+
+##heatmap without the other group set2
+
+```{r heatmap with the other group set2}
+#Reading input
+Average.df <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/monosIBSM_Averagemat_LOGNORMALISED_daycluster_300925.csv", row.names = 1)
+
+#Selecting the clusters name
+cMonocytes <- c("CM1", "CM2", "CM3", "CM4")
+rownames(Average.df) <- Average.df$day_cluster
+
+str(Average.df)
+Average.df$day <- factor(Average.df$day, levels = c("day0", "day8", "day36"))
+Average.df$cluster <- factor(Average.df$cluster, levels = cMonocytes)
+
+#### Subsetting cluster (for example one heatmap per cluster)
+Average.sub <- Average.df[Average.df$cluster %in% c("CM1", "CM2", "CM3", "CM4"), ]
+#Average.Tfh1CM <- Average.Tfh1CM[Average.Tfh1CM$day %in% c("day0", "day16"), ]
+rownames(Average.sub) <- Average.sub$day_cluster
+#### okay now to reorder EVERYTHING... 
+
+my_order <- c("day0-CM1", "day0-CM1", "day0-CM1", "day0-CM1",
+              "day8-CM1", "day8-CM1", "day8-CM1", "day8-CM1",
+              "day36-CM1", "day36-CM1", "day36-CM1", "day36-CM1",
+              "day0-CM2", "day0-CM2", "day0-CM2", "day0-CM2",
+              "day8-CM2", "day8-CM2", "day8-CM2", "day8-CM2",
+              "day36-CM2", "day36-CM2", "day36-CM2", "day36-CM2",
+              "day0-CM3", "day0-CM3", "day0-CM3", "day0-CM3",
+              "day8-CM3", "day8-CM3", "day8-CM3", "day8-CM3",
+              "day36-CM3", "day36-CM3", "day36-CM3", "day36-CM3",
+              "day0-CM4", "day0-CM4", "day0-CM4", "day0-CM4",
+              "day8-CM4", "day8-CM4", "day8-CM4", "day8-CM4",
+              "day36-CM4", "day36-CM4", "day36-CM4", "day36-CM4")
+
+Average.sub <- Average.sub[match(my_order, rownames(Average.sub)), ]
+
+Average.sub <- Average.sub %>%
+  mutate(day = factor(day, levels = c("day0","day8","day36")),
+         cluster = factor(cluster, levels = cMonocytes )) %>%
+  arrange(cluster, day)
+
+#### Getting the gene list and selecting the top 10 per cluster/day ####
+
+sigDGEs <- read.csv("/working_groups/boylelab/shared/ZulyPava/IBSM40_pseudobulk_scRNA/output/venn_input_ibsm40monos.csv", row.names=1)
+
+#Adding new name
+sigDGEs$cluster_name = factor(sigDGEs$cluster_name, levels = cMonocytes)
+#filter the comparison of interest and the direction of the genes
+merged_genes1 <- sigDGEs %>%
+  filter(
+    dir_sig == "up",
+    day %in% c("day36", "day8"),
+    set2 %in% c("d8_only", "d36_only", "d8&d36", "other")
+  ) %>%
+  group_by(set2) %>%
+  arrange(p_adj, .by_group = TRUE) %>%
+  slice_head(n = 20) %>%
+  ungroup()
+
+merged_genes1$gene = gsub("-", ".", merged_genes1$gene)
+merged_genes2 <- unique(merged_genes1$gene)
+
+#### subsetting our selected genes
+dfsub_d816<- as.matrix(Average.sub[, colnames(Average.sub) %in% merged_genes2])
+
+dfsub_d816 <- as.matrix(dfsub_d816)
+dfsub_d816 = scale(dfsub_d816)
+
+col = list(Cluster = c("CM1" = "#9e0142",
+                       "CM2" = "#f4a582",
+                       "CM3" = "#5e4fa2",
+                       "CM4" = "#66c2a5"),
+            Day = c("day0" = "#bababa",
+                   "day8" = "#fdae61",
+                   "day36" = "blue"))
+
+# ##We got high medium and low expression, we want 3 colors
+# rng <- max(abs(dfsub_d816), na.rm = TRUE)  # or use abs(expr_z) if you built it
+# rng <- if (is.finite(rng) && rng > 0) rng else 1  # fallback
+
+# 3-color diverging palette: negative / zero / positive
+col_fun <- colorRamp2(
+  c(-2, 0, 4),
+  c("#2166AC", "#FFFFFF", "#B2182B")   # blue - white - red (swap colors if you want)
+)
+
+ha <- HeatmapAnnotation(Cluster=Average.sub$cluster,
+                        Day=Average.sub$day,
+                        col = col)
+
+col_split <- factor(Average.sub$cluster, levels = c("CM1","CM2","CM3","CM4"))
+
+row_split0 <- merged_genes1 %>% 
+  filter(gene %in% merged_genes2) %>% # keep only genes in merged_genes2
+  select(gene, set2) %>% 
+  #distinct(gene, .keep_all = TRUE) %>%# one row per gene
+  mutate(set2 = factor(set2, levels = c("d8_only", "d36_only","d8&d36", "other")))
+
+# Align 'set' to the heatmap row order (genes)
+gene_order <- rownames(t(dfsub_d816))                       # rows of the heatmap
+set_map    <- setNames(as.character(row_split0$set2), row_split0$gene)
+row_set    <- factor(set_map[gene_order], levels = c("d8_only", "d36_only", "d8&d36", "other"))
+
+# Row annotation for 'set'
+row_ann <- rowAnnotation(
+  Set = row_set,
+  col = list(Set = c("d8_only" = "#fdae61", "d36_only" = "#0072B2", "d8&d36" ="#008837", "other"="grey")),
+  annotation_name_side = "top"
+)
+
+pdf(here("output/heatmap_D8andD36geneset_avexpdaycluster_nrev_v4_020926_withFCGRB.pdf"), width = 8, height =10)
+
+Heatmap(
+  t(dfsub_d816),
+  name = "AvExpr", col = col_fun,
+  top_annotation = ha,
+  left_annotation = row_ann,                 # <<< add row annotation
+  cluster_rows = FALSE,                       # keep clustering order
+  show_row_dend = FALSE,                     # <<< hide row dendrogram graphic
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,                  # (explicit; no column dendrogram)
+  column_split = col_split,
+  column_gap = unit(4, "mm"),
+  row_split = row_set,       # <<< split rows by set (d8_only / d36_only)
+  row_gap = unit(1, "mm"),
+  column_title = "Genes",
+  row_title = "Day-unique genes",
+  row_names_gp = gpar(fontsize = 6),
+  column_names_gp = gpar(fontsize = 4)
+)
+dev.off()
+```
+
+##QC ATACseq table
+
+```{r atacseq table}
+qc_tb <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/training_paper_atac_plots/allstudies_qc_atacseq_table_v1.csv")
+report <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/training_paper_atac_plots/Alignment and QC_indexsequence.csv")
+seq_report <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/training_paper_atac_plots/SAGCQR1446_NatalieStevens_21032025_NGSQualityReport.csv")
+```
+## QC tables
+```{r tables}
+head(qc_tb)
+head(report) 
+##naming variables
+colnames(qc_tb)[1] <-"uid"
+report <- report%>%
+  mutate(
+    Timepoint2 =
+           case_when(Timepoint %in% c("29", "27", "35") ~ "27",
+                                Timepoint %in% c("15", "16")~"15",
+                                Timepoint %in% c("8", "9")~"8",
+                                TRUE ~ Timepoint),
+    
+    uid =
+           case_when(Study == "QEC" ~ paste0(Study,"_",Part.ID),
+                     Study == "QEM" ~ paste0(Study,"_",Part.ID, "_d", Timepoint2),
+                     Study %in% c("CTM2002", "MMV367")~ paste0(Part.ID, "_d", Timepoint2))) %>%
+  filter(grepl("M", Lib.ID))
+
+report_s <- report[report$uid %in% qc_tb$uid,]
+
+qc_tb1 <- left_join(qc_tb, report_s%>%select(uid,Lib.ID, Sequencing.library.ID, Batch ), by = "uid")
+
+qc_tb1 <- qc_tb1%>%select(Lib.ID, Sequencing.library.ID, uid, Batch,
+                        Fraction.of.Reads.in.Peaks, Transcription.Start.Site.Enrichment,
+                        Non.Redundant.Fraction, PCR.Bottlenecking.Coefficient.1,
+                        PCR.Bottlenecking.Coefficient.2,Percent.of.reads.aligned.to.genome)
+colnames(seq_report)[1]<-"Sequencing.library.ID"
+colnames(seq_report)[2]<-"Lib.ID"
+colnames(seq_report)[6]<-"Sequencing depth (2x150bp M read pairs)"
+
+qc_tb2 <- left_join(qc_tb1, seq_report %>%
+                      select('Lib.ID',
+                             'Sequencing depth (2x150bp M read pairs)'), by = "Lib.ID")
+
+write.csv(qc_tb2, "/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/training_paper_atac_plots/allstudies_qc_atacseq_table_complete.csv")
+
+```
