@@ -1,0 +1,1 @@
+    bedtools bedToIgv -i your_narrowPeak_file.narrowPeak -g genome.chrom.sizes > your_narrowPeak.wig
