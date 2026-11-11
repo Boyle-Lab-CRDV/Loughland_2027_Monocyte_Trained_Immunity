@@ -1,0 +1,695 @@
+---
+title: "monocytes ATACseq Sabah_2 long"
+author: "zulyP"
+editor: visual
+knitr:
+  opts_chunk:
+    out.width: "60%"
+---
+
+# Overview
+
+We aim to identify chromatin accessibility changes during the acute phase compared with convalescence in the sabah_2 gd T-cell ATAC-seq dataset.
+
+This workflow: - annotates filtered peaks - merges annotations with featureCounts output - creates a filtered `DGEList` - performs exploratory QC using MDS - estimates surrogate variables - fits the final mixed model with `dream` - generates a **batch-corrected PCA** for visualization
+
+# Setup
+
+```{r setup}
+set.seed(12345)
+##Follow installation.R script for details on package download.
+
+# Load necessary libraries
+suppressMessages(library(ChIPseeker))
+suppressMessages(library(TxDb.Hsapiens.UCSC.hg38.knownGene))
+suppressMessages(library(clusterProfiler))
+suppressMessages(library(org.Hs.eg.db))
+suppressMessages(library(DiffBind))
+suppressMessages(library(tibble))
+suppressMessages(library(pheatmap))
+suppressMessages(library(kableExtra))
+suppressMessages(library(DESeq2))
+suppressMessages(library('variancePartition'))
+suppressMessages(library('edgeR'))
+suppressMessages(library('BiocParallel'))
+suppressMessages(library('tidyverse'))
+suppressMessages(library('statmod'))
+suppressMessages(library(here))
+suppressMessages(library(viridis))
+suppressMessages(library(sva))
+suppressMessages(library('variancePartition'))
+suppressMessages(library('statmod'))
+suppressMessages(library(stats))
+suppressMessages(library(factoextra)) #for PCA visualization
+suppressMessages(library(corrplot))
+suppressMessages(library(readxl))
+suppressMessages(library(colorspace))
+suppressMessages(library(factoextra))
+suppressMessages(library(ggforce))
+```
+
+```{r input files}
+# Input files
+peak_file <- "/working_groups/boylelab/shared/ZulyPava/formating4hpc/ATACseq_analysis/featurecounts/sabah_2_m_featurecounts/filtered_peaks.bed"
+raw_count_file <- "/working_groups/boylelab/shared/ZulyPava/formating4hpc/ATACseq_analysis/featurecounts/sabah_2_m_featurecounts/peak_counts.txt"
+sample_key_file <- "/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/sabah_2_m/sample_fastqname_key.csv"
+meta_file <- "/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/sabah_2_m/sample_sheet_DiffBind.csv"
+
+# Output directories
+out_dir <- "/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/sabah_2_m"
+plot_dir <- file.path(out_dir, "plots")
+var_dir  <- file.path(out_dir, "Variance_analysis")
+
+dir.create(plot_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(var_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+```{r peak annotation}
+peaks <- readPeakFile(peak_file)
+
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+
+peakAnno <- annotatePeak(
+  peaks,
+  TxDb = txdb,
+  tssRegion = c(-3000, 3000),
+  annoDb = "org.Hs.eg.db"
+)
+
+anno_df <- as.data.frame(peakAnno) %>%
+  mutate(GeneID = paste0("peak_", row_number())) %>%
+  relocate(GeneID)
+
+write.csv(
+  anno_df,
+  file.path(out_dir, "annotated_filtered_peaks.csv"),
+  row.names = FALSE
+)
+```
+
+```{r peak annotation plots}
+pdf(file.path(plot_dir, "Barplot_distance_TSS_regions.pdf"))
+plotDistToTSS(peakAnno)
+dev.off()
+
+pdf(file.path(plot_dir, "Pie_genomic_functional_categories.pdf"))
+plotAnnoPie(peakAnno)
+dev.off()
+```
+
+```{r read counts and metadata}
+anno_df <- read.csv(file.path(out_dir, "annotated_filtered_peaks.csv"))
+raw_counts <- read.table(raw_count_file, header = TRUE)
+meta0 <- read.csv(meta_file)
+key <- read.csv(sample_key_file)
+
+# Keep GeneID + count columns
+count_data <- raw_counts[, c(1, 7:ncol(raw_counts))]
+colnames(count_data)[1] <- "GeneID"
+
+# Rename count columns using key
+rename_map <- setNames(key$New_id, key$old_id)
+current_colnames <- colnames(count_data)
+
+new_colnames <- ifelse(
+  current_colnames %in% names(rename_map),
+  rename_map[current_colnames],
+  current_colnames
+)
+
+colnames(count_data) <- new_colnames
+
+# Merge annotations and counts
+counts_df <- left_join(anno_df, count_data, by = "GeneID")
+
+write.csv(
+  counts_df,
+  file.path(out_dir, "annotated_peak_counts.csv"),
+  row.names = FALSE
+)
+
+
+```
+
+```{r metadata formatting}
+set.seed(12345)
+
+counts_df <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/sabah_2_m/annotated_peak_counts.csv")
+
+meta0 <- read.csv("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/sabah_2_m/sample_sheet_DiffBind.csv")
+
+meta = meta0 %>% select(-bamReads, -Peaks) %>% filter(Factor%in%c("0", "1"))
+
+# Extract count matrix (remove annotation columns)
+rownames(counts_df) <- counts_df$GeneID
+
+counts_df2 <- counts_df %>%
+  filter(!seqnames%in%c("chr14_KI270726v1_random",
+                        "chr15_KI270727v1_random",
+                        "chr16_KI270728v1_random",
+                        "chr1_KI270713v1_random",
+                        "chr22_KI270733v1_random",
+                        "chrUn_GL000219v1",
+                        "chrUn_GL000220v1",
+                        "chrUn_KI270744v1",
+                        "chrX", "chrY"))
+
+
+
+count_matrix <- counts_df2 %>%
+ dplyr::select(c(19:30), )
+
+
+# Make sure columns match metadata sample names
+all(colnames(count_matrix) %in% meta$SampleID)  # Should return TRUE
+##Fixing row name to match with count matrix
+
+
+# Reorder metadata to match count matrix
+metadata <- meta[match(colnames(count_matrix), meta$SampleID), ]
+rownames(metadata) <- metadata$SampleID
+
+metadata
+
+metadata_all <- metadata %>% rename(batch = Condition)
+
+```
+
+```{r Create DGEList and filter low-abundance peaks}
+dgelist <- DGEList(
+  counts = count_matrix,
+  group = metadata_all$day,
+  batch = metadata_all$batch,
+  lib.size = colSums(count_matrix),
+  samples = metadata_all$Replicate,
+  genes = counts_df2$SYMBOL
+)
+
+dgelist$samples$batch <- factor(metadata_all$batch)
+
+dgelist$samples$group <- factor(metadata_all$day)
+dgelist$samples$samples <- factor(metadata_all$Replicate)
+
+# Inspect group sizes
+xtabs(~ group, dgelist$samples)
+# group
+#     endC postinfx 
+#        6        6 
+xtabs(~ group + batch, dgelist$samples)
+#           batch
+# group      1 2 3
+#   endC     4 1 1
+#   postinfx 4 1 1
+
+# Filter low-count peaks
+sapply(0:5, function(k) sum(rowSums(cpm(dgelist) > k) >= 5))
+#118294  97024  71127  57285  48598  42237
+#97024/118294=0.8201938
+#71127/118294=0.6012731
+#57285/118294=0.4842596
+#48598/118294=0.4108239
+#42237/118294=0.3570511
+
+
+keepg <- rowSums(cpm(dgelist) > 2) >= 5
+dgelist <- dgelist[keepg, , keep.lib.sizes = FALSE]
+
+# TMM normalization
+dgelist <- calcNormFactors(dgelist)
+
+dim(dgelist)
+#71127    12
+```
+
+```{r Exploratory voom and MDS}
+##all the covariates minus the random effect
+design_qc <- model.matrix(~ 0 + group + batch, dgelist$samples)
+colnames(design_qc) <- colnames(design_qc) %>%
+  str_replace("^group", "") %>%
+  str_replace("^samples", "")
+
+elist_qc <- voom(dgelist, design_qc, plot = TRUE)
+
+```
+
+```{r MDS by group }
+group_cols <- c("postinfx" = "#9e0142", "endC" = "#74add1")
+
+plotMDS(
+  elist_qc,
+  top = 500,
+  labels = paste0(rownames(dgelist$samples), "-", dgelist$samples$group),
+  col = group_cols[as.character(dgelist$samples$group)],
+  gene.selection = "common",
+  main = "MDS coloured by group"
+)
+
+legend(
+  "bottom",
+  legend = names(group_cols),
+  col = unname(group_cols),
+  pch = 16,
+  ncol = 2,
+  bty = "n"
+)
+```
+
+```{r MDS by batch}
+batch_cols <- c("1" = "darkgreen", "2" = "#9e0142", "3" = "#74add1")
+
+plotMDS(
+  elist_qc,
+  top = 500,
+  labels = paste0(rownames(dgelist$samples), "-", dgelist$samples$batch),
+  col = batch_cols[as.character(dgelist$samples$batch)],
+  gene.selection = "common",
+  main = "MDS coloured by batch"
+)
+
+legend(
+  "bottom",
+  legend = names(batch_cols),
+  col = unname(batch_cols),
+  pch = 16,
+  ncol = 3,
+  bty = "n"
+)
+
+```
+
+```{r Surrogate variable analysis}
+# Full model for SVA
+mod <- model.matrix(~ group + batch , data = dgelist$samples)
+
+# Null model for SVA
+mod0 <- model.matrix(~ batch, data = dgelist$samples)
+
+# Estimate number of SVs
+n_sv <- num.sv(dat = elist_qc$E, mod = mod, method = "be")
+n_sv
+
+#2
+
+svobj <- sva(
+  dat = elist_qc$E,
+  mod = mod,
+  mod0 = mod0,
+  n.sv = n_sv
+)
+
+# Add first SV to metadata
+metadata_all$sv1 <- svobj$sv[, 1]
+metadata_all$sv2 <- svobj$sv[, 2]
+
+
+dgelist$samples$sv1 <- metadata_all$sv1
+dgelist$samples$sv2 <- metadata_all$sv2
+
+
+```
+
+```{r SV1 diagnostic plot}
+plot(
+  svobj$sv[, 1],
+  col = batch_cols[as.character(metadata_all$batch)],
+  pch = 16,
+  main = "SV1 coloured by batch",
+  ylab = "SV1",
+  xlab = "Sample index"
+)
+
+legend(
+  "bottomleft",
+  legend = names(batch_cols),
+  col = unname(batch_cols),
+  pch = 16,
+  bty = "n"
+)
+
+```
+
+```{r SV2 diagnostic plot}
+plot(
+  svobj$sv[, 2],
+  col = batch_cols[as.character(metadata_all$batch)],
+  pch = 16,
+  main = "SV2 coloured by batch",
+  ylab = "SV2",
+  xlab = "Sample index"
+)
+
+legend(
+  "bottomleft",
+  legend = names(batch_cols),
+  col = unname(batch_cols),
+  pch = 16,
+  bty = "n"
+)
+
+```
+
+```{r checking what the svs correlate with}
+sv1 <- as.numeric(metadata_all$sv1)
+
+# numeric variables
+cors <- cor(sv1, metadata_all[, c("sv2")],
+            use = "pairwise.complete.obs")
+
+r2 <- cors^2
+r2
+# categorical variables
+summary(lm(sv1 ~ sv2, data = metadata_all))
+
+# categorical variables
+summary(lm(sv1 ~ batch, data = metadata_all))#sv1 corr with batch
+summary(lm(sv1 ~ Factor, data = metadata_all))
+
+metadata_all$Replicate <- factor(metadata_all$Replicate)
+# categorical variables
+summary(lm(sv2 ~ batch, data = metadata_all))
+summary(lm(sv2 ~ Factor, data = metadata_all))
+#None corr
+
+```
+
+```{r Final dream model}
+param <- SnowParam(8, "SOCK", progressbar = TRUE) # rstudio server doesn't like parallele processing
+
+metadata_all$samples <- factor(metadata_all$Replicate)
+metadata_all$group   <- factor(metadata_all$day, levels = c("postinfx", "endC"))
+metadata_all$group   <- relevel(metadata_all$group, ref = c("endC"))
+
+#expluding sv1 and sv4
+form3 <- ~ group + sv1 +  sv2 
+
+vobjDream <- voomWithDreamWeights(
+  dgelist,
+  form3,
+  metadata_all,
+  plot = FALSE
+)
+saveRDS(vobjDream,"/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/sabah_2_m/Variance_analysis/vobjDream_160426.rds" )
+
+fitmm3 <- dream(vobjDream, form3, metadata_all)
+fitmm3 <- eBayes(fitmm3)
+
+saveRDS(
+  fitmm3,
+  file.path(out_dir, "Dream_fitmm3_group_2sv.rds")
+)
+```
+
+```{r Save differential accessibility results}
+coef_names <- colnames(coef(fitmm3))
+
+top_tables <- lapply(coef_names, function(coef_name) {
+  tt <- topTable(
+    fitmm3,
+    coef = coef_name,
+    sort.by = "none",
+    confint = 0.95,
+    number = Inf
+  )
+  
+  tt$GeneID <- rownames(tt)
+  tt$Coefficient <- coef_name
+  tt
+})
+
+names(top_tables) <- coef_names
+
+combined_top_tables <- bind_rows(top_tables)
+
+write.csv(
+  combined_top_tables,
+  file.path(out_dir, "Dream_fitmm3_group_2sv__ci95_160426.csv"),
+  row.names = FALSE
+)
+
+head(combined_top_tables %>% filter(Coefficient == "grouppostinfx"&adj.P.Val<0.05))
+```
+
+```{r Variance partition}
+
+form_vp <- ~ Factor + sv1 + sv2
+
+vp <- fitExtractVarPartModel(vobjDream, form_vp, metadata_all)
+
+pdf(file.path(var_dir, "VariancePartitionPlot.pdf"))
+plotVarPart(sortCols(vp))
+dev.off()
+#vp <- readRDS(file.path(var_dir, "vp_obj.rds"))
+saveRDS(vp, file.path(var_dir, "vp_obj.rds"))
+```
+
+```{r Batch-corrected PCA}
+design_pca <- model.matrix(~ group, data = metadata_all)
+
+expr_bc <- removeBatchEffect(
+  x = vobjDream$E,
+  batch = metadata_all$batch,
+  covariates = as.matrix(metadata_all[, c("sv1", "sv2")]),
+  design = design_pca
+)
+
+
+res.pca <- prcomp(t(expr_bc), scale. = TRUE)
+
+pca_metadata <- data.frame(
+  PC1 = res.pca$x[, 1],
+  PC2 = res.pca$x[, 2],
+  SampleID = rownames(res.pca$x),
+  Group = factor(metadata_all$group),
+  Batch = factor(metadata_all$batch),
+  Sample = factor(metadata_all$SampleID)
+)
+
+pca_metadata$Group <- gsub("postinfx", "qem_d28", pca_metadata$Group)
+pca_metadata$Group <- gsub("endC", "qec_neg", pca_metadata$Group)
+```
+
+```{r plotting the PCA timepoints and batch as shape batch effect}
+# PCA without batch correction or SV2 removal
+res.pca2 <- prcomp(
+  t(vobjDream$E),
+  center = TRUE,
+  scale. = TRUE
+)
+
+# Extract PCA coordinates
+pca_df <- as.data.frame(res.pca2$x[, 1:2, drop = FALSE])
+
+# Match metadata to PCA sample order
+idx <- match(rownames(pca_df), rownames(metadata_all))
+
+# Check that all samples have matching metadata
+stopifnot(!anyNA(idx))
+
+pca_metadata2 <- metadata_all[idx, , drop = FALSE]
+
+# Add PCA coordinates to metadata
+pca_metadata2$PC1 <- pca_df$PC1
+pca_metadata2$PC2 <- pca_df$PC2
+
+# Define batch
+pca_metadata2$batch <- factor(pca_metadata2$batch)
+
+# Rename groups, assuming original values are endC and postinfx
+pca_metadata2$group <- factor(
+  pca_metadata2$group,
+  levels = c("endC", "postinfx"),
+  labels = c("qec_neg", "qem_d28")
+)
+
+# Verify recoding
+table(pca_metadata2$group, useNA = "ifany")
+table(pca_metadata2$batch, useNA = "ifany")
+
+# Keep your original colours
+colz <- c("2"= "#fdae61", "3"="darkgreen", "1"="darkblue")
+
+# Variance explained
+var_explained <- 100 * res.pca2$sdev^2 / sum(res.pca2$sdev^2)
+
+# PCA plot: colour = group, shape = batch
+pca_nosva2 <- ggplot(
+  pca_metadata2,
+  aes(x = PC1, y = PC2, color = batch, shape = group)
+) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", round(var_explained[1], 2), "% variance")) +
+  ylab(paste0("PC2: ", round(var_explained[2], 2), "% variance")) +
+  scale_color_manual(values = colz) +
+  scale_shape_manual(values = c(16, 17, 18)) +
+  theme_bw()
+
+# Display plot
+pca_nosva2
+
+# Save PDF
+ggsave(
+  filename = "/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/sabah_2_m/Variance_analysis/PCA_timepoint_batchShaped2.pdf",
+  plot = pca_nosva2,
+  width = 7,
+  height = 5,
+  dpi = 600
+)
+pca_nosva2
+```
+
+```{r plotting the PCA timepoints as shape samples as colors}
+sample_cols <- c(
+  "QEM_397" = "#8c510a",
+  "QEM_415" = "#d8b365",
+  "QEM_423" = "#f6e8c3",
+  "QEM_437" = "#c7eae5",
+  "QEM_461" = "#5ab4ac",
+  "QEM_464" = "#01665e",
+  "QEC_75"= "#8c511a",
+  "QEC_69"="#d8b366",
+  "QEC_71"="#f6e8c6",
+  "QEC_95"="#c7eae8",
+  "QEC_70"="#5ab6ac",  
+  "QEC_74"="#01665e"
+  
+)
+
+pca_plot2 <- ggplot(pca_metadata, aes(x = PC1, y = PC2, color = Sample, shape = Group)) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", round(summary(res.pca)$importance[2, 1] * 100, 2), "% variance")) +
+  ylab(paste0("PC2: ", round(summary(res.pca)$importance[2, 2] * 100, 2), "% variance")) +
+  scale_color_manual(values = sample_cols) +
+  scale_shape_manual(values = c(15, 17,16)) +
+  theme_bw()
+
+ggsave(
+  filename = file.path(var_dir, "PCA_batch_corrected_sample_group.pdf"),
+  plot = pca_plot2,
+  width = 7, height = 5, dpi = 600
+)
+pca_plot2
+```
+
+```{r ATACseq PCA of days with ellipse per sample}
+# time-ordered, colorblind-friendly palette
+colz3 <- c(
+  "qem_d28" = "#009E73", 
+  "qec_neg" = "#0072B2"
+)
+
+# matching, slightly lighter fills for ellipses
+fillz3 <- lighten(colz3, amount = 0.6)
+
+pca_nosva5 <- ggplot(pca_metadata, aes(PC1, PC2)) +
+  # axes
+  geom_hline(yintercept = 0, colour = "grey60", linewidth = 0.3) +
+  geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.3) +
+
+  # ellipses (filled + outline)
+  stat_ellipse(
+    aes(color = Group, fill = Group),
+    geom   = "polygon",
+    alpha  = 0.20,
+    linewidth = 0.6,
+    level  = 0.95
+  ) +
+
+  # sample points: filled symbols with black edge
+  geom_point(
+    aes(fill = Group, shape = Group),
+    size   = 4,
+    colour = "black",
+    stroke = 0.4
+  ) +
+
+  # group means: larger black “x”
+stat_summary(
+    data = pca_metadata,
+    aes(x = PC1, y = PC2, group = Group),
+    fun = mean,
+    geom = "point",
+    shape = 1,
+    size = 0,
+    stroke = 0,
+    inherit.aes = FALSE)+
+
+# labels
+  xlab(paste0("PC1: ", round(summary(res.pca)$importance[2, 1] * 100, 2), "% variance")) +
+  ylab(paste0("PC2: ", round(summary(res.pca)$importance[2, 2] * 100, 2), "% variance")) +
+
+  # manual scales
+  scale_color_manual(values = colz3) +
+  scale_fill_manual(values  = fillz3) +
+  scale_shape_manual(values = c("qem_d28" = 21, "qec_neg" = 21)) +
+
+  # clean theme
+  theme_bw(base_size = 11) +
+  theme(
+    panel.grid.major = element_line(colour = "grey90", linewidth = 0.3),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(face = "bold"),
+    legend.title = element_blank(),
+    legend.background = element_rect(fill = "white", colour = "grey70"),
+    legend.key = element_rect(fill = NA)
+  )
+
+
+pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/sabah_2_m/Variance_analysis/PCA_Peaks_endCvqemd28_sabah_2_m_v2_elipse1_main.pdf",  width = 7, height = 5)
+pca_nosva5
+dev.off()
+pca_nosva5
+```
+
+##This next plot doesn't apply for this analysis
+
+```{r ATACseq PCA supp fig days with elipse}
+###Ellipses by sample ####
+# colz4 <- c(
+#   "QEM_464"="#bcbddc",
+#   "QEM_437"= "#d8b365" ,
+#   "QEM_397"=  "#543005", 
+#   "QEM_415"="#003c30" ,
+#   "QEM_423"= "#5ab4ac",
+#   "QEM_461"= "#54278f",
+#     "QEC_75"="#c7eae8",
+#   "QEC_69"="#c7eae8",
+#   "QEC_71"="#c7eae8",
+#   "QEC_95"="#c7eae8",
+#   "QEC_70"="#c7eae8", 
+#   "QEC_74"="#c7eae8")
+# 
+# fillz4 <- lighten(colz4, amount = 0.6)
+# 
+# pca_nosva6 <- fviz_pca_ind(res.pca, 
+#              label='none',
+#              alpha.ind = 0.5,
+#              habillage=pca_metadata$Sample,
+#              repel = TRUE,
+#              palette = colz4,
+#              # Don't use default Ellipses!!!!
+#              # addEllipses = TRUE,
+#              invisible='quali') +
+#   geom_point(aes(shape=pca_metadata$Group, fill=pca_metadata$Sample),size=3) +
+#   scale_shape_manual(values = c("d0" = 22, "d28" = 23, "neg" = 21)) +
+#   guides(fill = "none")+
+#   # ADD ggforce's ellipses
+#   ggforce::geom_mark_ellipse(aes(color = Groups)) +
+#   theme_bw(base_size = 11) +
+#   theme(legend.position = "bottom",
+#     panel.grid.major = element_line(colour = "grey90", linewidth = 0.5),
+#     panel.grid.minor = element_blank(),
+#     axis.title = element_text(face = "bold"),
+#     legend.title = element_blank(),
+#     legend.background = element_rect(fill = "white", colour = "grey70"),
+#     legend.key = element_rect(fill = NA))+
+#    scale_y_continuous(breaks = seq(-500, 500, by = 250), 
+#                      limits = c(-500, 500)) + # Reversed limits
+#    coord_fixed(ratio = 1, xlim = c(-500, 850))
+# 
+# # Plot the PCA
+# pca_nosva6
+# 
+# pdf("/working_groups/boylelab/shared/ZulyPava/ATACseq_R4.4/ATAC_seq/output/sabah_2_m/Variance_analysis/PCA_Peaks_timepoint_sabah_2_m_v2_elipse1_supp.pdf",  width = 7, height = 5)
+# pca_nosva6
+# dev.off()
+```
