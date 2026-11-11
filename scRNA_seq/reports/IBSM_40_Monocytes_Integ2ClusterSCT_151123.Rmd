@@ -1,0 +1,437 @@
+---
+title: "IBSM-40 Monocytes integration & clustering with SCTransform"
+author: "Zuly"
+date: '2023-11-15'
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(Seurat) 
+library(patchwork)
+library(sctransform)
+library(limma)
+library(data.table)
+library(ape)
+library(SC3)
+library(clustree)
+library(MAST)
+library(UpSetR)
+
+knitr::opts_chunk$set(
+	echo = TRUE,
+	fig.align = "center",
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+## **Experimental details**:
+
+**Design:** cohort of individuals/donors= 4 - A,B,C,D
+
+**Timepoints:** 4 - Day0, Day8, Day16 and Day36
+
+**Celltypes:** 3 - Tfh, Monocytes, GammaDelta Tcells
+
+**Sequencing strategy:**
+
+RawData_Folder: 20220318_BoyleNextSeq MultiAnalysis_Folder:
+scRNA_April_2022 Chemestry= 3' Flowcells=3 FlowcellsName =
+220314-AHWM72BGXK ,220315- AHMTHYBGXL, 220316-AHLTV5BGXL Lanes=4
+SamplesPerLane= Lane1=Day0, Donors=A-D; Lane2=Day8, Donors=A-D;
+Lane3=Day16, Donors=A-D; Lane1=Day36, Donors=A-D.
+
+Raw data was imported from cellranger aggr output. Due to poor quality
+day 16 was removed from the analysis. For more information check
+Monocytes_with_D16data/
+
+## **Input data**
+
+Using the rds file produce in the data_exploration_rds0.R script
+
+```{r, input data, echo=TRUE, results='hide', warn.conflicts=F, quietly=T}
+
+ibsm.mono.F <- readRDS(file = "D:/OneDrive - Burnet Institute/Seurat_analysis_test/IBSM_40/data/IBSM_mono_filtered_210823.rds")
+
+##Check number of cells
+table(ibsm.mono.F@meta.data$day)
+```
+
+## **Integration & normalization:**
+
+*SCTransform*: This normalisation method, removes technical variability
+using Pearson residuals from "regularized negative binomial regression,"
+where cellular sequencing depth is utilized as a covariate in a
+generalized linear model. Data was also tested using the
+LogNormalisation method (Gene counts for each cell are divided by the
+total counts for that cell and multiplied by the scale factor. This is
+then natural-log transformed using log1p)
+
+```{r normalisation & integration, echo=TRUE, quietly=T, results='hide', warn.conflicts=F}
+#adjust the limit for allowable object sizes within R 
+options(future.globals.maxSize = 4000 * 1024^2)
+
+# splitting the RNA measurements into layers for each group. Day and donor samples
+split_seurat <- SplitObject(ibsm.mono.F, split.by = "day_donor")
+
+split_seurat <- split_seurat[c("day0_donor0", "day0_donor1", "day0_donor2", "day0_donor3","day8_donor0", "day8_donor1","day8_donor2", "day8_donor3","day36_donor0", "day36_donor1", "day36_donor2", "day36_donor3")]
+
+for (i in 1:length(split_seurat)) {
+   split_seurat[[i]] <- SCTransform(split_seurat[[i]], vars.to.regress = c("percent.mt"))
+}
+
+# Check which assays are stored in objects
+split_seurat$day0_donor0@assays
+
+# Select the most variable features to use for integration
+integ_features <- SelectIntegrationFeatures(object.list = split_seurat, 
+                                            nfeatures = 3000) 
+
+# Prepare the SCT list object for integration
+split_seurat <- PrepSCTIntegration(object.list = split_seurat, 
+                                   anchor.features = integ_features)
+
+# Find best buddies - can take a while to run
+integ_anchors <- FindIntegrationAnchors(object.list = split_seurat, 
+                                        normalization.method = "SCT", 
+                                        anchor.features = integ_features)
+# Integrate across conditions
+immune.combined <- IntegrateData(anchorset = integ_anchors, 
+                                   normalization.method = "SCT")
+```
+
+## **Continue standard workflow:**
+
+```{r, continue standard workflow, echo=TRUE, results='hide', warn.conflicts=F, quietly=T}
+##Performing an integrated analysis
+
+# specify that we will perform downstream analysis on the corrected data note that the
+# original unmodified data still resides in the 'RNA' assay
+# normalised data resides in the 'SCT" assay slot (used for DE analysis)
+DefaultAssay(immune.combined) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+immune.combined <- RunPCA(immune.combined, npcs = 30, verbose = FALSE)
+ElbowPlot(immune.combined, ndims = 30)
+immune.combined <- RunUMAP(immune.combined, reduction = "pca", dims = 1:20)
+immune.combined <- FindNeighbors(immune.combined, reduction = "pca", dims = 1:20)
+
+##Fixing levels of some variables
+day_levels <- c("day0", "day8", "day36")
+immune.combined@meta.data$day <- factor(x = immune.combined@meta.data$day, levels = day_levels)
+day_donor_levels <- c("day0_donor0", "day0_donor1", "day0_donor2", "day0_donor3","day8_donor0", "day8_donor1","day8_donor2", "day8_donor3","day36_donor0", "day36_donor1", "day36_donor2", "day36_donor3")
+immune.combined@meta.data$day_donor <- factor(x = immune.combined@meta.data$day_donor, levels = day_donor_levels)
+donor_levels <- c("donor0", "donor1","donor2","donor3")
+immune.combined@meta.data$donor_id <- factor(x = immune.combined@meta.data$donor_id, levels = donor_levels)
+```
+
+Selecting PC numbers using ElbowPlot outcome:
+
+```{r ElbowPlot2, include=TRUE, fig.width=10, fig.height=5, fig.fullwidth=TRUE}
+# Determine percent of variation associated with each PC
+pct <- immune.combined[["pca"]]@stdev / sum(immune.combined[["pca"]]@stdev) * 100
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+# Determine which PC exhibits cumulative percent greater than 90% and % variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+co1
+# Determine the difference between variation of PC and subsequent PC
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+# last point where change of % of variation is more than 0.1%.
+co2
+# Minimum of the two calculation
+pcs <- min(co1, co2)
+pcs
+# Create a dataframe with values
+plot_df <- data.frame(pct = pct, 
+                      cumu = cumu, 
+                      rank = 1:length(pct))
+# Elbow plot to visualize 
+ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) + 
+  geom_text() + 
+  geom_vline(xintercept = 90, color = "grey") + 
+  geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
+  theme_bw()
+```
+
+*The minimum number of PC to use is 15, we will use 20.*
+
+## **Clustering the cells:**
+
+Graph-based clustering approach using the distance metric previously
+identified (i.e. Number of PCs using Elbowplot) Algorithm for modularity
+optimization (1 = original Louvain algorithm; 2 = Louvain algorithm with
+multilevel refinement; 3 = SLM ##algorithm; 4 = Leiden algorithm).
+Leiden requires the leidenalg python.
+
+```{r, clustering, echo=TRUE, results='hide', warn.conflicts=F, quietly=T}
+immune.combined <- FindClusters(immune.combined, algorithm = 3, resolution = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1), verbose = TRUE)
+```
+
+### **Cluster tree** 
+
+ClusTree of reference editors. Each level of the tree (from top to
+bottom) corresponds to the k used, and each node on that level
+corresponds to a cluster of that k. The edges (arrows) of the tree
+represent the editors that "move" from one cluster in level k to another
+cluster in level k+1. The legend of the graph displays 4 scales, from
+top to bottom: (1) the transparency level of arrows (in_prop) shows the
+proportion editors from one group that end up in another group. (2) The
+arrow colour (count) shows the number of editors that "move" from one
+cluster to another, (3) the node size is proportional to the number
+
+```{r, Clustertree, include=TRUE, fig.width=10, fig.height=15, fig.fullwidth=TRUE}
+clustree(immune.combined, prefix = "integrated_snn_res.", layout = "sugiyama")
+
+clustree(immune.combined, prefix = "integrated_snn_res.", node_colour = "sc3_stability")
+
+```
+
+Based on the nodes origin and trajectory, the number of clusters seems
+to stabilize between resolution 0.8 and 0.9. (17 clusters in each)
+
+*We inspected resolutions -0.1-1.1 finding **0.8** as optimal based on
+cluster tree.*
+
+```{r, SettingClusters_sct, include=TRUE}
+Idents(immune.combined) <- "integrated_snn_res.0.8"
+```
+
+## **Clusters inspection:** 
+
+We check on the integrity of each cluster based on variables such as
+nFeature, nCount and content of mithocondrial transcripts. We then check
+the distribution of these clusters among days and donors to make sure
+they are evenly represented.
+
+```{r QC clusters and donors, include=TRUE, fig.width=10, fig.height=5, fig.fullwidth=TRUE}
+##How clusters look
+DimPlot(immune.combined, label = TRUE, pt.size = 2, group.by = "integrated_snn_res.0.8") + NoLegend() 
+
+##Quality of cells in clusters
+VlnPlot(immune.combined, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "integrated_snn_res.0.8", pt.size = 0, ncol = 4)
+
+##How clusters look per day
+DimPlot(immune.combined, label = TRUE, pt.size = 2, group.by = "integrated_snn_res.0.8", split.by = "day") + NoLegend() 
+
+##How clusters look per donor
+DimPlot(immune.combined, label = TRUE, pt.size = 2, group.by = "integrated_snn_res.0.8", split.by = "donor_id") + NoLegend() 
+
+##Clusters per day_donor
+DimPlot(immune.combined, label = TRUE, pt.size = 2, group.by = "integrated_snn_res.0.8", split.by = "day_donor") + NoLegend() 
+
+#Proportion of donor and day per cluster
+meta <- immune.combined@meta.data
+
+p <- ggplot(data = meta, aes(x = integrated_snn_res.0.8, fill = day)) +
+  geom_bar(position = "fill") +
+  ylab("Proportion_day") + xlab("Cluster")
+
+d <- ggplot(data = meta, aes(x = integrated_snn_res.0.8, fill = donor_id)) +
+  geom_bar(position = "fill") +
+  ylab("Proportion_donor") + xlab("Cluster")
+
+p + d + theme_light()
+```
+
+## **Cluster's ID** 
+
+We need to change the assay and run the standard workflow first.
+
+```{r, standard workflow pre-clustering, echo=TRUE, results='hide', warn.conflicts=F, quietly=T}
+DefaultAssay(immune.combined) <- "SCT"
+immune.combined <- SCTransform(immune.combined, vars.to.regress = "percent.mt", verbose = FALSE)
+immune.combined <- RunPCA(immune.combined, features = VariableFeatures(object = immune.combined), npcs = 30, verbose = FALSE)
+immune.combined <- RunUMAP(immune.combined, reduction = "pca", dims = 1:20)
+immune.combined <- FindNeighbors(immune.combined, reduction = "pca", dims = 1:20)
+```
+
+We used two approaches to identify the clusters ID. First, we used
+traditional markers to identify main cell types (DCs, pDCs etc) and
+then, we ran FindAllmarkers to identify genes deferentially expressed
+among similar celltypes. (i.e. CD14+CD16- monocytes)
+
+```{r, Cluster ID, echo=TRUE,  fig.fullwidth=TRUE}
+
+DotPlot(immune.combined, assay = "SCT", features=c("CD14", "FCGR3A", "CD3E","CD4", "CCL3", "RETN", "CD8A", "CCR7", "TCF7", "CD27", "IL7R", "GZMA", "GZMB","CCL5","FOXP3", "CTLA4", "HLA-DRA", "PPBP", "CLEC4C", "CLIC3","IL1B", "CD1C"), cols=c("white", "red3"))+theme_bw(base_size=14)+theme(axis.text.x = element_text(angle = 45,  vjust = 1, hjust=1))+theme (panel.grid.major = element_blank (), panel.grid.minor = element_blank ())
+
+DotPlot(immune.combined, assay = "SCT", features=c("CD14", "FCGR3A", "CX3CR1", "CDKN1C", "CD1C", "FCER1A", "CLEC4C", "NRP1","XCR1", "CLEC9A","CADM1","IL3RA"),
+          cols=c("white", "red3"))+theme_bw(base_size=14)+theme(axis.text.x = element_text(angle = 45,  vjust = 1, hjust=1))+theme (panel.grid.major = element_blank (), panel.grid.minor = element_blank ())
+
+DimPlot(immune.combined, reduction = "umap", label = TRUE, label.size = 6)
+```
+
+### Main clusters labels:
+
+-   Clusters 0, 1, 2, 6, 7, 9, 10, 11, 12,13 and 14 = classical
+    monocytes
+
+-   Cluster 3 = Intermediate monocytes (CD14+, FCGR3A+, IL3RA)
+
+-   Cluster 4 and 8 = Non-classical monocytes (FCGR3A, CX3CR1, CDKN1C)
+
+-   Cluster 5 = DCs (Dendritic cells 2) (CD1C+,FCER1A+)
+
+-   Cluster 15 = DCs1 (Dendritic cells 1) (XCR1+,CLEC9A+,CADM1+)
+
+-   Cluster 16 = pDCs (Plasmacytoids cells) (CLEC4C+, NRP1+,IL3RA+)
+
+Looking at discerning markers for classical monocytes
+
+```{r, cluster ID2, echo=TRUE, results='hide', warn.conflicts=F, quietly=T}
+#This step takes a long time. To make it run faster I'm just reading the csv file.
+#cluster_markers <- FindAllMarkers(immune.combined)
+cluster_markers <- read.csv(file = "D:/OneDrive - Burnet Institute/Seurat_analysis_test/IBSM_40/graphs/clustersSCTintdaydonor/clustersmarkers.csv")
+tapply(cluster_markers$gene, cluster_markers$cluster, head)
+#write.csv(cluster_markers, file = "graphs/clustersSCTintdaydonor/clustersmarkers.csv")
+```
+
+### **Classical monocytes labels:**
+
+-   Cluster 0 - Classical monocyte - IL1B
+
+-   Cluster 1 - Classical monocyte - COQ7(Modulation of the amount of
+    β2-integrins on the surface of blood monocytes)/HNRNPU (with
+    longncRNA, enhance stability of several inflammatory mRNAs)
+
+-   Cluster 2 - Classical monocyte - CDKN1A
+
+-   Cluster 6 - Classical monocyte - DUSP1 (involved in the regulation
+    of the cell cycle and apoptosis.)
+
+-   Cluster 7 - Classical monocyte - MALAT1 (regulates antigen uptake,
+    processing, and phagocytosis in macrophages)
+
+-   Cluster 9 - Classical monocyte - S100A8
+
+-   Cluster 10 - Classical monocyte - ISG15 (controls cellular
+    metabolism and mitochondrial activity.)
+
+-   Cluster 11 - Classical monocyte - HLA-DPB1/RPS18 Ribosomal proteins
+    associated with synthesis pro-inflammatory
+
+-   Cluster 12 - Classical monocyte - MALAT1/HNRNPU (could be a mixed of
+    Cluster 1 and 7)
+
+-   Cluster 13 - Classical monocyte - longnoncoding genes and HLa gens
+    Cluster 14 - Classical monocyte - IL1RN
+
+**Note** We found a large number of classical monocyte subcluster that
+look genuine. However, for pseudobulk RNA seq, each sample
+(cluster_day_donor) requires a min number of cells. With higher number
+of cluster the amount of cells decreases. We tried to reduce the number
+of clusters to make sure there are enough cells per samples.
+
+We look the amount of genes shared by clusters using an upset plot
+
+```{r, cluster reclustering, echo=TRUE,  fig.fullwidth=TRUE}
+##Plotting similar genes between clusters using upset plot
+upset0 <-  cluster_markers
+upset0$clusterid <- factor(upset0$cluster,levels=c("0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12","13", "14", "15", "16"),
+                           labels=c("cMonocyte-IL1B_0","cMonocyte-COQ7_1",
+                                    "cMonocyte-CDKN1A_2","intMonocyte_3",
+                                    "ncMonocyte-CD16_4", "DCs2_5", 
+                                    "cMonocyte-DUSP1_6", "cMonocyte-MALAT_7",
+                                    "ncMonocyte-CD16_8", "cMonocyte-S100A8_9",
+                                    "cMonocyte-ISG15_10","cMonocyte-RPS18_11",
+                                    "cMonocyte-mixed_12","cMonocyte-HLA_13",
+                                    "cMonocyte-IL1RN_14", "DCs1_15", "pDCs_16"))
+
+upset1 <- upset0
+##Creating new grouping variables
+upset1$dir <- NA
+upset1$dir[upset1$avg_log2FC>0] <- "up"
+upset1$dir[upset1$avg_log2FC<0] <- "dw"
+tapply(upset1$avg_log2FC, upset1$dir, summary)
+
+##selecting only up genes
+upset1 <- upset1[(upset1$dir[]=="up"),]
+tapply(upset1$avg_log2FC, upset1$dir, summary)
+
+upset1$cluster_dir <- NA
+upset1$cluster_dir <- paste0(upset1$clusterid,"_",upset1$dir)
+
+##creating lists of the sets
+upset2 <- upset1[,c(8,11)]
+
+upset2Split = split(upset2[,1], f = upset2$cluster_dir)
+
+##Upset plot ordering by set frequency
+upset(fromList(upset2Split),
+      nsets = 17,
+      nintersects = 100,
+      order.by = "freq",
+      decreasing = T,
+      mb.ratio = c(0.5, 0.5),
+      number.angles = 0,
+      text.scale = 1.1,
+      point.size = 2.8,
+      line.size = 1)
+```
+
+### Labelling clusters
+
+```{r, Cluster Labelling, echo=TRUE, warn.conflicts=F, quietly=T}
+immune.combined@meta.data$subtype <- NA
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "0"))] <- "cMonocyte-IL1B_0"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "1"))] <- "cMonocyte-COQ7_1"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "2"))] <- "cMonocyte-CDKN1A_2"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "3"))] <- "intMonocyte_3"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "4"))] <- "ncMonocyte-CD16_4"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "5"))] <- "DCs2_5"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "6"))] <- "cMonocyte-DUSP1_6"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "7"))] <- "cMonocyte-MALAT_7"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "8"))] <- "ncMonocyte-CD16_8"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "9"))] <- "cMonocyte-S100A8_9"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "10"))] <- "cMonocyte-ISG15_10"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "11"))] <- "DCs2-RPS18_11"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "12"))] <- "cMonocyte-_12"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "13"))] <- "cMonocyte-HLA_13"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "14"))] <- "cMonocyte-IL1RN_14"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "15"))] <- "DCs1_15"
+immune.combined@meta.data$subtype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "16"))] <- "pDCs_16"
+
+##Regrouping cells based on the genes and directions that they shared (upsetplot) and the origin of the cluster (clustree)
+immune.combined@meta.data$celltype <- NA
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "0"))] <- "cMonocyte-IL_02614"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "1"))] <- "cMonocyte-COQ7_11213"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "2"))] <- "cMonocyte-IL_02614"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "3"))] <- "intMonocyte_3"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "4"))] <- "ncMonocyte-CD16_48"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "5"))] <- "DCs2_511"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "6"))] <- "cMonocyte-IL_02614"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "7"))] <- "cMonocyte-S100A8_79"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "8"))] <- "ncMonocyte-CD16_48"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "9"))] <- "cMonocyte-S100A8_79"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "10"))] <- "cMonocyte-ISG15_10"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "11"))] <- "DCs2_511"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "12"))] <- "cMonocyte-COQ7_11213"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "13"))] <- "cMonocyte-COQ7_11213"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "14"))] <- "cMonocyte-IL_02614"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "15"))] <- "DCs1_15"
+immune.combined@meta.data$celltype[which(str_detect(immune.combined@meta.data$integrated_snn_res.0.8, "16"))] <- "pDCs_16"
+```
+
+```{r, Cluster Labelling1, echo=FALSE, results='hide', warn.conflicts=F, quietly=T}
+##Checking cluster labelling
+#Checking new clustering
+DefaultAssay(immune.combined) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+immune.combined <- RunPCA(immune.combined, npcs = 30, verbose = FALSE)
+immune.combined <- RunUMAP(immune.combined, reduction = "pca", dims = 1:20)
+immune.combined <- FindNeighbors(immune.combined, reduction = "pca", dims = 1:20)
+
+## Per celltype
+Idents(immune.combined) <- "celltype"
+DimPlot(immune.combined, label = TRUE, pt.size = 2, group.by = "celltype") + NoLegend() 
+
+## Per subtype
+Idents(immune.combined) <- "subtype"
+DimPlot(immune.combined, label = TRUE, pt.size = 2, group.by = "subtype") + NoLegend() 
+
+```
